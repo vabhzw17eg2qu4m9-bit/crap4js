@@ -28,6 +28,7 @@ jobs:
       - name: Refresh CRAP + coverage badges
         # Self-hosting: derive both badge values from the real coverage just
         # generated above, then commit the refreshed SVGs back.
+        if: github.event_name == 'push' && github.actor != 'github-actions[bot]'
         run: |
           cov=$(node -e "const c=require('./coverage/coverage-final.json');let t=0,h=0;for(const f in c){const s=c[f].s||{};for(const k in s){t++;if(s[k]>0)h++;}}console.log(t?(100*h/t).toFixed(1):'0.0')")
           if [ -z "$cov" ]; then
@@ -63,6 +64,8 @@ jobs:
           node scripts/badge.mjs coverage "$cov_val" "$cov_color" badges/coverage.svg
           echo "max=$max_val color=$crap_color | cov=$cov_val color=$cov_color"
       - name: Commit refreshed badges
+        if: github.event_name == 'push' && github.actor != 'github-actions[bot]'
+        continue-on-error: true
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -70,6 +73,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "badges unchanged"
           else
-            git commit -m "chore: refresh CRAP/coverage badges [skip ci]"
+            git commit -m "chore: refresh CRAP/coverage badges"
             git push
           fi
