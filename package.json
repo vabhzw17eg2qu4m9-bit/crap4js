@@ -1,0 +1,34 @@
+{
+  "name": "crap4js",
+  "version": "0.1.0",
+  "description": "CRAP (Change Risk Anti-Patterns) metric for JavaScript — combines cyclomatic complexity with Istanbul coverage. A port of crap4java.",
+  "type": "module",
+  "main": "src/analyzer.js",
+  "bin": {
+    "crap4js": "./src/cli.js"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "acorn": "^8.18.0"
+  },
+  "keywords": [
+    "crap",
+    "crap4java",
+    "cyclomatic-complexity",
+    "coverage",
+    "istanbul",
+    "quality",
+    "metrics"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/IstiN/crap4js"
+  },
+  "homepage": "https://github.com/IstiN/crap4js#readme"
+}
