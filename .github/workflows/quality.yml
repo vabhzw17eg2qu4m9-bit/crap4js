@@ -11,10 +11,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
           cache: npm
-      - run: npm install
-      - run: npm install -D c8@latest
+      - run: npm ci
       - name: Test with coverage
         # Run the tests AND emit coverage/coverage-final.json (the Istanbul
         # JSON the tool reads) plus a text summary. The package.json "test"
