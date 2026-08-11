@@ -1,7 +1,7 @@
 # crap4js
 
 [![Quality](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/actions/workflows/quality.yml/badge.svg)](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/actions/workflows/quality.yml)
-[![version](https://img.shields.io/github/v/tag/vabhzw17eg2qu4m9-bit/crap4js?label=version)](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/releases)
+[![version](https://img.shields.io/github/v/release/vabhzw17eg2qu4m9-bit/crap4js?label=version)](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/releases)
 ![CRAP](badges/crap.svg)
 ![coverage](badges/coverage.svg)
 
