@@ -5,6 +5,7 @@ import { readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 const SOURCE_EXTS = new Set(['.js', '.mjs', '.cjs']);
+const CHANGE_STATUS = new Set(['M', 'A', 'R', 'C', '?']);
 
 /**
  * Recursively walk <root>/src/ for JavaScript source files (.js/.mjs/.cjs).
@@ -34,20 +35,43 @@ export function changedFiles(projectRoot) {
   const srcDir = path.join(projectRoot, 'src');
   const files = new Set();
   for (const line of result.stdout.split('\n')) {
-    if (!line || line.length < 4) continue;
-    const x = line[0];
-    const y = line[1];
-    if (!isChangeStatus(x) && !isChangeStatus(y)) continue;
-
-    const finalPath = renameTarget(line.slice(3).trim());
-    if (!SOURCE_EXTS.has(path.extname(finalPath))) continue;
-
-    const resolved = path.resolve(projectRoot, finalPath);
-    const rel = path.relative(srcDir, resolved);
-    if (rel.startsWith('..') || path.isAbsolute(rel)) continue;
-    files.add(resolved);
+    const resolved = parseStatusLine(line, projectRoot, srcDir);
+    if (resolved) files.add(resolved);
   }
   return [...files].sort();
+}
+
+/**
+ * Parse one `git status --porcelain` line into the resolved absolute source
+ * path under <srcDir/>, or null when the line should be skipped: blank/short
+ * lines, no change-status indicator (deletions, unchanged), non-source
+ * extension, or paths resolving outside src/.
+ */
+export function parseStatusLine(line, projectRoot, srcDir) {
+  const rel = relativePath(line);
+  if (!rel) return null;
+  const resolved = path.resolve(projectRoot, rel);
+  return inSrc(resolved, srcDir) ? resolved : null;
+}
+
+/**
+ * True for the porcelain status letters that mark a file as added/modified/
+ * renamed/copied/untracked. Space (unchanged) and D (deleted) are excluded.
+ */
+export function isChangeStatus(c) {
+  return CHANGE_STATUS.has(c);
+}
+
+function relativePath(line) {
+  if (!line || line.length < 4) return null;
+  if (!isChangeStatus(line[0]) && !isChangeStatus(line[1])) return null;
+  const finalPath = renameTarget(line.slice(3).trim());
+  return SOURCE_EXTS.has(path.extname(finalPath)) ? finalPath : null;
+}
+
+function inSrc(resolved, srcDir) {
+  const rel = path.relative(srcDir, resolved);
+  return !rel.startsWith('..') && !path.isAbsolute(rel);
 }
 
 /**
@@ -74,33 +98,35 @@ export function expandPaths(args, projectRoot) {
 }
 
 function walkSourceDir(dir) {
-  let entries;
-  try {
-    entries = readdirSync(dir);
-  } catch {
-    return [];
-  }
   const out = [];
-  for (const e of entries) {
+  for (const e of readEntries(dir)) {
     if (e === 'node_modules') continue;
     const p = path.join(dir, e);
-    let st;
-    try {
-      st = statSync(p);
-    } catch {
-      continue;
-    }
-    if (st.isDirectory()) {
-      out.push(...walkSourceDir(p));
-    } else if (st.isFile() && SOURCE_EXTS.has(path.extname(e))) {
-      out.push(p);
-    }
+    const st = statOrSkip(p);
+    if (st?.isDirectory()) out.push(...walkSourceDir(p));
+    else if (isSourceFile(e, st)) out.push(p);
   }
   return out.sort();
 }
 
-function isChangeStatus(c) {
-  return c === 'M' || c === 'A' || c === 'R' || c === 'C' || c === '?';
+function readEntries(dir) {
+  try {
+    return readdirSync(dir);
+  } catch {
+    return [];
+  }
+}
+
+function statOrSkip(p) {
+  try {
+    return statSync(p);
+  } catch {
+    return undefined;
+  }
+}
+
+function isSourceFile(name, st) {
+  return st?.isFile() && SOURCE_EXTS.has(path.extname(name));
 }
 
 function renameTarget(pathPart) {

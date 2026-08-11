@@ -23,8 +23,11 @@ const COMPLEXITY_TYPES = new Set([
   'WhileStatement',
   'DoWhileStatement',
   'CatchClause',
+  'SwitchCase',
   'ConditionalExpression',
 ]);
+
+const LOGICAL_OPS = new Set(['&&', '||']);
 
 const FUNCTION_LIKE = new Set(['FunctionExpression', 'ArrowFunctionExpression']);
 
@@ -47,78 +50,82 @@ export function extractMethods(source) {
   return methods;
 }
 
+// Sentinel: a handler returns this when it has already descended into the
+// node's children itself and the generic child traversal should be skipped.
+const SKIP = Symbol('skip');
+
+// One handler per AST node type that yields a method entry or controls how
+// its children are traversed. Each handler is small (CC ≤ 4); walkForEntries
+// is just the dispatch.
+const HANDLERS = {
+  FunctionDeclaration(node, className, methods) {
+    if (!node.body) return;
+    methods.push(makeMethod(node.id?.name ?? '<anonymous>', node));
+  },
+  MethodDefinition(node, className, methods) {
+    if (node.kind === 'constructor') return;
+    if (!node.value?.body) return;
+    const mn = keyName(node.key);
+    methods.push(makeMethod(className ? `${className}.${mn}` : mn, node.value));
+  },
+  VariableDeclarator(node, className, methods) {
+    if (!node.init?.body || !FUNCTION_LIKE.has(node.init.type)) return;
+    methods.push(makeMethod(node.id?.name ?? '<anonymous>', node.init));
+  },
+  AssignmentExpression(node, className, methods) {
+    if (!node.right?.body || !FUNCTION_LIKE.has(node.right.type)) return;
+    methods.push(makeMethod(leftName(node.left), node.right));
+  },
+  Property(node, className, methods) {
+    // Object-literal method shorthand or `{ key: function () {} }`.
+    if (!node.value?.body || !FUNCTION_LIKE.has(node.value.type)) return;
+    methods.push(makeMethod(keyName(node.key), node.value));
+  },
+  ClassDeclaration: classHandler,
+  ClassExpression: classHandler,
+  ExportDefaultDeclaration(node, className, methods) {
+    // Walk the declaration inside; the export wrapper is transparent.
+    if (node.declaration) walkForEntries(node.declaration, className, methods);
+    return SKIP;
+  },
+  ExportNamedDeclaration(node, className, methods) {
+    if (node.declaration) walkForEntries(node.declaration, className, methods);
+    return SKIP;
+  },
+};
+
+function classHandler(node, className, methods) {
+  // Class field initialisers (PropertyDefinition) are not methods; the body
+  // is the only place method entries live, so we walk it directly with the
+  // class's own name as context and skip the generic traversal.
+  const cn = node.id?.name ?? className;
+  for (const child of node.body?.body ?? []) walkForEntries(child, cn, methods);
+  return SKIP;
+}
+
 function walkForEntries(node, className, methods) {
-  if (!node || typeof node !== 'object' || !node.type) return;
+  if (!isNode(node)) return;
+  const handler = HANDLERS[node.type];
+  if (handler?.(node, className, methods) === SKIP) return;
+  visitChildren(node, className, methods);
+}
 
-  switch (node.type) {
-    case 'FunctionDeclaration': {
-      if (node.body) {
-        const name = node.id ? node.id.name : '<anonymous>';
-        methods.push(makeMethod(name, node));
-      }
-      break;
-    }
-    case 'MethodDefinition': {
-      if (node.kind === 'constructor') break;
-      if (node.value && node.value.body) {
-        const mn = keyName(node.key);
-        const name = className ? `${className}.${mn}` : mn;
-        methods.push(makeMethod(name, node.value));
-      }
-      break;
-    }
-    case 'PropertyDefinition':
-      // Class field initialisers are not methods; ignore.
-      break;
-    case 'VariableDeclarator': {
-      if (node.init && FUNCTION_LIKE.has(node.init.type) && node.init.body) {
-        const name = node.id && node.id.name ? node.id.name : '<anonymous>';
-        methods.push(makeMethod(name, node.init));
-      }
-      break;
-    }
-    case 'AssignmentExpression': {
-      if (node.right && FUNCTION_LIKE.has(node.right.type) && node.right.body) {
-        methods.push(makeMethod(leftName(node.left), node.right));
-      }
-      break;
-    }
-    case 'Property': {
-      // Object-literal method shorthand or `{ key: function () {} }`.
-      if (node.value && FUNCTION_LIKE.has(node.value.type) && node.value.body) {
-        methods.push(makeMethod(keyName(node.key), node.value));
-      }
-      break;
-    }
-    case 'ClassDeclaration':
-    case 'ClassExpression': {
-      const cn = node.id ? node.id.name : className;
-      if (node.body && Array.isArray(node.body.body)) {
-        for (const child of node.body.body) {
-          walkForEntries(child, cn, methods);
-        }
-      }
-      return;
-    }
-    case 'ExportDefaultDeclaration':
-    case 'ExportNamedDeclaration': {
-      // Walk the declaration inside; the export wrapper is transparent.
-      if (node.declaration) walkForEntries(node.declaration, className, methods);
-      return;
-    }
-  }
-
+function visitChildren(node, className, methods) {
   for (const key of Object.keys(node)) {
     if (SKIP_KEYS.has(key)) continue;
     const v = node[key];
     if (Array.isArray(v)) {
       for (const c of v) {
-        if (c && typeof c === 'object' && c.type) walkForEntries(c, className, methods);
+        if (isNode(c)) walkForEntries(c, className, methods);
       }
-    } else if (v && typeof v === 'object' && v.type) {
+    } else if (isNode(v)) {
       walkForEntries(v, className, methods);
     }
   }
+}
+
+function isNode(v) {
+  return v && typeof v === 'object' && v.type;
 }
 
 function makeMethod(name, fnNode) {
@@ -132,30 +139,38 @@ function makeMethod(name, fnNode) {
 
 function computeComplexity(root) {
   let cc = 1;
-  const walk = (n) => {
-    if (!n || typeof n !== 'object' || !n.type) return;
-    if (COMPLEXITY_TYPES.has(n.type)) cc++;
-    if (n.type === 'SwitchCase') cc++;
-    if (n.type === 'LogicalExpression' && (n.operator === '&&' || n.operator === '||')) cc++;
-    for (const key of Object.keys(n)) {
-      if (SKIP_KEYS.has(key)) continue;
-      const v = n[key];
-      if (Array.isArray(v)) {
-        for (const c of v) {
-          if (c && typeof c === 'object' && c.type) {
-            // Nested NAMED FunctionDeclaration is reported separately.
-            if (c.type === 'FunctionDeclaration' && c.id) continue;
-            walk(c);
-          }
-        }
-      } else if (v && typeof v === 'object' && v.type) {
-        if (v.type === 'FunctionDeclaration' && v.id) continue;
-        walk(v);
-      }
+  const visit = (n) => {
+    if (!isNode(n)) return;
+    cc += complexityDelta(n);
+    for (const child of childrenOf(n)) {
+      // Nested NAMED FunctionDeclaration is reported as its own entry; skip
+      // its body so its branches don't count toward the enclosing function.
+      if (!isNamedFunctionDecl(child)) visit(child);
     }
   };
-  walk(root);
+  visit(root);
   return cc;
+}
+
+function complexityDelta(n) {
+  if (COMPLEXITY_TYPES.has(n.type)) return 1;
+  if (n.type === 'LogicalExpression' && LOGICAL_OPS.has(n.operator)) return 1;
+  return 0;
+}
+
+function childrenOf(n) {
+  const out = [];
+  for (const key of Object.keys(n)) {
+    if (SKIP_KEYS.has(key)) continue;
+    const v = n[key];
+    if (Array.isArray(v)) out.push(...v.filter(isNode));
+    else if (isNode(v)) out.push(v);
+  }
+  return out;
+}
+
+function isNamedFunctionDecl(n) {
+  return n.type === 'FunctionDeclaration' && n.id;
 }
 
 function keyName(key) {
@@ -167,7 +182,7 @@ function keyName(key) {
   return '<anonymous>';
 }
 
-function leftName(node) {
+export function leftName(node) {
   if (!node) return '<anonymous>';
   if (node.type === 'Identifier') return node.name;
   if (node.type === 'MemberExpression') {

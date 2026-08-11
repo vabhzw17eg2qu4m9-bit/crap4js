@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert';
-import { extractMethods } from '../src/complexity.js';
+import { extractMethods, leftName } from '../src/complexity.js';
 
 function find(methods, name) {
   return methods.find((m) => m.name === name);
@@ -149,4 +149,84 @@ export default function () {
   const m = find(methods, '<anonymous>');
   assert.ok(m);
   assert.equal(m.complexity, 2);
+});
+
+test('function assigned to an object property via AssignmentExpression', () => {
+  const src = `
+let ns = {};
+ns.method = function (a) {
+  if (a) return 1;
+  return 0;
+};
+`;
+  const methods = extractMethods(src);
+  const m = find(methods, 'ns.method');
+  assert.ok(m, 'ns.method not extracted');
+  assert.equal(m.complexity, 2);
+});
+
+test('object-literal method shorthand and keyed function Property', () => {
+  const src = `
+const obj = {
+  short(a) { if (a) return 1; return 0; },
+  keyed: function (a) { if (a) return 2; return 3; },
+};
+`;
+  const methods = extractMethods(src);
+  const short = find(methods, 'short');
+  const keyed = find(methods, 'keyed');
+  assert.ok(short, 'shorthand property not extracted');
+  assert.ok(keyed, 'keyed function property not extracted');
+  assert.equal(short.complexity, 2);
+  assert.equal(keyed.complexity, 2);
+});
+
+// ---------- leftName (pure helper) ----------
+
+test('leftName: Identifier returns its name', () => {
+  const id = { type: 'Identifier', name: 'foo' };
+  assert.equal(leftName(id), 'foo');
+});
+
+test('leftName: null/undefined/non-node returns <anonymous>', () => {
+  assert.equal(leftName(null), '<anonymous>');
+  assert.equal(leftName(undefined), '<anonymous>');
+  assert.equal(leftName({ type: 'Literal', value: 1 }), '<anonymous>');
+});
+
+test('leftName: MemberExpression with identifier property', () => {
+  // foo.bar  (non-computed)
+  const member = {
+    type: 'MemberExpression',
+    object: { type: 'Identifier', name: 'foo' },
+    property: { type: 'Identifier', name: 'bar' },
+    computed: false,
+  };
+  assert.equal(leftName(member), 'foo.bar');
+});
+
+test('leftName: MemberExpression with computed Literal property', () => {
+  // foo['x']  (computed, literal key)
+  const member = {
+    type: 'MemberExpression',
+    object: { type: 'Identifier', name: 'foo' },
+    property: { type: 'Literal', value: 'x' },
+    computed: true,
+  };
+  assert.equal(leftName(member), 'foo.x');
+});
+
+test('leftName: nested MemberExpression (a.b.c)', () => {
+  const member = {
+    type: 'MemberExpression',
+    object: {
+      type: 'MemberExpression',
+      object: { type: 'Identifier', name: 'a' },
+      property: { type: 'Identifier', name: 'b' },
+      computed: false,
+    },
+    property: { type: 'Identifier', name: 'c' },
+    computed: false,
+  };
+  assert.equal(leftName(member), 'a.b.c');
 });
