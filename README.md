@@ -197,3 +197,4 @@ git config core.hooksPath githooks
 ## License
 
 MIT © 2026 IstiN and contributors. A port of `crap4java`.
+
