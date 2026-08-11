@@ -1,6 +1,6 @@
 {
   "name": "crap4js",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "CRAP (Change Risk Anti-Patterns) metric for JavaScript — combines cyclomatic complexity with Istanbul coverage. A port of crap4java.",
   "type": "module",
   "main": "src/analyzer.js",
