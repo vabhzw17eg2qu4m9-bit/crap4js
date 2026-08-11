@@ -1,0 +1,23 @@
+name: Quality
+
+on: [push, pull_request]
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Test
+        run: npm test
+      - name: Self-analyze (crap4js on its own source)
+        # Self-hosting: the tool computes CRAP for its own .js files and the
+        # full report is visible in the run log. Informational for now
+        # (harden to a blocking 8.0 gate once max CRAP is driven down).
+        # Mirrors the crap4dart / crap4go CI self-analysis step.
+        continue-on-error: true
+        run: node src/cli.js
