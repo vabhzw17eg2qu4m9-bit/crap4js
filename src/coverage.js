@@ -40,17 +40,20 @@ export function loadCoverage(filePath, projectRoot) {
  */
 export function coverageForMethod(fileCoverage, startLine, endLine) {
   if (!fileCoverage || !fileCoverage.statementMap) return null;
-  let total = 0;
-  let covered = 0;
   const hits = fileCoverage.s || {};
-  for (const [id, stmt] of Object.entries(fileCoverage.statementMap)) {
-    const sLine = stmt.start && stmt.start.line;
-    const eLine = stmt.end && stmt.end.line;
+  const ids = intersectingStatements(fileCoverage.statementMap, startLine, endLine);
+  if (ids.length === 0) return null;
+  const covered = ids.filter((id) => hits[id] > 0).length;
+  return covered / ids.length;
+}
+
+function intersectingStatements(statementMap, startLine, endLine) {
+  const out = [];
+  for (const [id, stmt] of Object.entries(statementMap)) {
+    const sLine = stmt?.start?.line;
+    const eLine = stmt?.end?.line;
     if (sLine == null || eLine == null) continue;
-    if (eLine < startLine || sLine > endLine) continue;
-    total++;
-    if (hits[id] > 0) covered++;
+    if (eLine >= startLine && sLine <= endLine) out.push(id);
   }
-  if (total === 0) return null;
-  return covered / total;
+  return out;
 }

@@ -23,47 +23,52 @@ import { crapScore } from './crapScore.js';
  */
 export function analyze({ filePaths, coveragePath, projectRoot }) {
   const warn = (msg) => process.stderr.write(`Warning: ${msg}\n`);
-
-  let coverageMap = null;
-  if (coveragePath) {
-    if (existsSync(coveragePath)) {
-      try {
-        coverageMap = loadCoverage(coveragePath, projectRoot);
-      } catch (e) {
-        warn(`failed to parse coverage file ${coveragePath}: ${e.message}`);
-      }
-    } else {
-      warn(`coverage file not found at ${coveragePath}. Coverage will be N/A.`);
-    }
-  }
+  const coverageMap = loadCoverageMap(coveragePath, projectRoot, warn);
 
   const metrics = [];
   for (const file of filePaths) {
-    const source = readFileSync(file, 'utf8');
-    const rel = path.relative(projectRoot, file).split(path.sep).join('/');
-    let methods;
-    try {
-      methods = extractMethods(source);
-    } catch (e) {
-      warn(`failed to parse ${rel}: ${e.message}`);
-      continue;
-    }
-    const fileCoverage = coverageMap ? coverageMap.get(rel) : null;
-    for (const m of methods) {
-      const coverage = coverageForMethod(fileCoverage, m.startLine, m.endLine);
-      metrics.push({
-        methodName: m.name,
-        file: rel,
-        startLine: m.startLine,
-        complexity: m.complexity,
-        coverage,
-        crapScore: crapScore(m.complexity, coverage),
-      });
-    }
+    metrics.push(...analyzeFile(file, projectRoot, coverageMap, warn));
   }
 
   metrics.sort(compareMetrics);
   return metrics;
+}
+
+function loadCoverageMap(coveragePath, projectRoot, warn) {
+  if (!coveragePath) return null;
+  if (!existsSync(coveragePath)) {
+    warn(`coverage file not found at ${coveragePath}. Coverage will be N/A.`);
+    return null;
+  }
+  try {
+    return loadCoverage(coveragePath, projectRoot);
+  } catch (e) {
+    warn(`failed to parse coverage file ${coveragePath}: ${e.message}`);
+    return null;
+  }
+}
+
+function analyzeFile(file, projectRoot, coverageMap, warn) {
+  const rel = path.relative(projectRoot, file).split(path.sep).join('/');
+  let methods;
+  try {
+    methods = extractMethods(readFileSync(file, 'utf8'));
+  } catch (e) {
+    warn(`failed to parse ${rel}: ${e.message}`);
+    return [];
+  }
+  const fileCoverage = coverageMap ? coverageMap.get(rel) : null;
+  return methods.map((m) => {
+    const coverage = coverageForMethod(fileCoverage, m.startLine, m.endLine);
+    return {
+      methodName: m.name,
+      file: rel,
+      startLine: m.startLine,
+      complexity: m.complexity,
+      coverage,
+      crapScore: crapScore(m.complexity, coverage),
+    };
+  });
 }
 
 export function compareMetrics(a, b) {

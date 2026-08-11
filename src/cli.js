@@ -35,8 +35,25 @@ function usage() {
   ].join('\n');
 }
 
+const SIMPLE_FLAGS = {
+  '--help': 'help',
+  '-h': 'help',
+  '--changed': 'changed',
+  '--run-tests': 'runTests',
+};
+
 function parseArgs(argv) {
-  const opts = {
+  const opts = newOpts();
+  for (let i = 0; i < argv.length; i++) {
+    i = applyArg(opts, argv, i);
+  }
+  validateOpts(opts);
+  opts.thresholdValue = parseThreshold(opts.threshold);
+  return opts;
+}
+
+function newOpts() {
+  return {
     paths: [],
     changed: false,
     help: false,
@@ -44,45 +61,51 @@ function parseArgs(argv) {
     threshold: undefined,
     runTests: false,
   };
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a === '--help' || a === '-h') {
-      opts.help = true;
-    } else if (a === '--changed') {
-      opts.changed = true;
-    } else if (a === '--run-tests') {
-      opts.runTests = true;
-    } else if (a === '--coverage') {
-      const v = argv[++i];
-      if (v == null) throw new Error('--coverage requires a value');
-      opts.coverage = v;
-    } else if (a.startsWith('--coverage=')) {
-      opts.coverage = a.slice('--coverage='.length);
-    } else if (a === '--threshold') {
-      const v = argv[++i];
-      if (v == null) throw new Error('--threshold requires a value');
-      opts.threshold = v;
-    } else if (a.startsWith('--threshold=')) {
-      opts.threshold = a.slice('--threshold='.length);
-    } else if (a.startsWith('--')) {
-      throw new Error(`Unknown flag: ${a}`);
-    } else {
-      opts.paths.push(a);
-    }
+}
+
+function applyArg(opts, argv, i) {
+  const a = argv[i];
+  const simple = SIMPLE_FLAGS[a];
+  if (simple) {
+    opts[simple] = true;
+    return i;
   }
+  if (isFlag(a, '--coverage')) return takeValue(opts, 'coverage', a, argv, i);
+  if (isFlag(a, '--threshold')) return takeValue(opts, 'threshold', a, argv, i);
+  if (a.startsWith('--')) throw new Error(`Unknown flag: ${a}`);
+  opts.paths.push(a);
+  return i;
+}
+
+function isFlag(a, flag) {
+  return a === flag || a.startsWith(flag + '=');
+}
+
+function takeValue(opts, key, a, argv, i) {
+  const prefix = `--${key}=`;
+  if (a.startsWith(prefix)) {
+    opts[key] = a.slice(prefix.length);
+    return i;
+  }
+  const v = argv[i + 1];
+  if (v == null) throw new Error(`--${key} requires a value`);
+  opts[key] = v;
+  return i + 1;
+}
+
+function validateOpts(opts) {
   if (opts.changed && opts.paths.length > 0) {
     throw new Error('--changed cannot be combined with explicit paths');
   }
-  let thresholdValue = DEFAULT_THRESHOLD;
-  if (opts.threshold !== undefined) {
-    const n = Number(opts.threshold);
-    if (Number.isNaN(n) || n < 0) {
-      throw new Error(`Invalid threshold: ${opts.threshold}`);
-    }
-    thresholdValue = n;
+}
+
+function parseThreshold(threshold) {
+  if (threshold === undefined) return DEFAULT_THRESHOLD;
+  const n = Number(threshold);
+  if (Number.isNaN(n) || n < 0) {
+    throw new Error(`Invalid threshold: ${threshold}`);
   }
-  opts.thresholdValue = thresholdValue;
-  return opts;
+  return n;
 }
 
 function maxCrap(metrics) {
@@ -93,67 +116,74 @@ function maxCrap(metrics) {
   return max;
 }
 
+const FAIL = Symbol('fail');
+
 function main(argv, streams = {}) {
-  const out = streams.out || process.stdout;
-  const err = streams.err || process.stderr;
-  const cwd = streams.cwd || process.cwd();
+  const ctx = context(streams);
 
-  let opts;
-  try {
-    opts = parseArgs(argv);
-  } catch (e) {
-    err.write(e.message + '\n');
-    out.write(usage());
+  const opts = tryStep(ctx, () => parseArgs(argv));
+  if (opts === FAIL) {
+    ctx.out.write(usage());
     return 1;
   }
-
   if (opts.help) {
-    out.write(usage());
+    ctx.out.write(usage());
     return 0;
   }
+  return runWithOpts(opts, ctx);
+}
 
-  if (opts.runTests) {
-    try {
-      runTests(cwd);
-    } catch (e) {
-      err.write(e.message + '\n');
-      return 1;
-    }
-  }
-
-  let files;
-  try {
-    if (opts.changed) files = changedFiles(cwd);
-    else if (opts.paths.length > 0) files = expandPaths(opts.paths, cwd);
-    else files = findSourceFiles(cwd);
-  } catch (e) {
-    err.write(e.message + '\n');
-    return 1;
-  }
-
+function runWithOpts(opts, ctx) {
+  if (opts.runTests && tryStep(ctx, () => runTests(ctx.cwd)) === FAIL) return 1;
+  const files = tryStep(ctx, () => resolveFiles(opts, ctx.cwd));
+  if (files === FAIL) return 1;
   if (files.length === 0) {
-    out.write('No JavaScript files to analyze.\n');
+    ctx.out.write('No JavaScript files to analyze.\n');
     return 0;
   }
+  const coveragePath = resolveCoveragePath(opts, ctx.cwd);
+  const metrics = tryStep(ctx, () =>
+    analyze({ filePaths: files, coveragePath, projectRoot: ctx.cwd }),
+  );
+  if (metrics === FAIL) return 1;
+  ctx.out.write(formatReport(metrics, { threshold: opts.thresholdValue }));
+  return reportVerdict(metrics, opts.thresholdValue, ctx);
+}
 
-  const coveragePath = opts.coverage
+function resolveCoveragePath(opts, cwd) {
+  return opts.coverage
     ? path.resolve(cwd, opts.coverage)
     : path.join(cwd, DEFAULT_COVERAGE);
+}
 
-  let metrics;
+function context(streams) {
+  return {
+    out: streams.out || process.stdout,
+    err: streams.err || process.stderr,
+    cwd: streams.cwd || process.cwd(),
+  };
+}
+
+function tryStep(ctx, fn) {
   try {
-    metrics = analyze({ filePaths: files, coveragePath, projectRoot: cwd });
+    return fn();
   } catch (e) {
-    err.write(e.message + '\n');
-    return 1;
+    ctx.err.write(e.message + '\n');
+    return FAIL;
   }
+}
 
-  out.write(formatReport(metrics, { threshold: opts.thresholdValue }));
+function resolveFiles(opts, cwd) {
+  if (opts.changed) return changedFiles(cwd);
+  if (opts.paths.length > 0) return expandPaths(opts.paths, cwd);
+  return findSourceFiles(cwd);
+}
 
+function reportVerdict(metrics, threshold, ctx) {
   const max = maxCrap(metrics);
-  if (max > opts.thresholdValue) {
-    err.write(
-      `CRAP threshold exceeded: ${max.toFixed(1)} > ${opts.thresholdValue.toFixed(1)}\n`,
+  if (max > threshold) {
+    ctx.err.write(
+      `CRAP threshold exceeded: ${max.toFixed(1)} > ${threshold.toFixed(1)}\n`,
     );
     return 2;
   }
