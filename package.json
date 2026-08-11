@@ -16,6 +16,7 @@
   "dependencies": {
     "acorn": "^8.18.0"
   },
+  "devDependencies": {},
   "keywords": [
     "crap",
     "crap4java",
@@ -32,3 +33,4 @@
   },
   "homepage": "https://github.com/IstiN/crap4js#readme"
 }
+

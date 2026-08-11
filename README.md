@@ -1,5 +1,10 @@
 # crap4js
 
+[![Quality](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/actions/workflows/quality.yml/badge.svg)](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/actions/workflows/quality.yml)
+[![version](https://img.shields.io/github/v/tag/vabhzw17eg2qu4m9-bit/crap4js?label=version)](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/releases)
+![CRAP](badges/crap.svg)
+![coverage](badges/coverage.svg)
+
 **CRAP (Change Risk Anti-Patterns) metric for JavaScript.**
 
 `crap4js` computes the CRAP score for every function/method in a JavaScript
@@ -177,6 +182,16 @@ crap4js/
 ```bash
 npm install     # acorn only
 npm test        # node --test
+```
+
+### Pre-commit hook
+
+A `crap4js` pre-commit hook lives in `githooks/pre-commit`. It runs the tool
+on staged `*.js`/`*.mjs`/`*.cjs` files (threshold 8.0) and blocks the commit
+when any function's CRAP exceeds the threshold. Enable it once after cloning:
+
+```bash
+git config core.hooksPath githooks
 ```
 
 ## License

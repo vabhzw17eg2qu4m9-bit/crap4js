@@ -5,13 +5,16 @@ on: [push, pull_request]
 jobs:
   quality:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
-      - run: npm ci
+      - run: npm install
+      - run: npm install -D c8@latest
       - name: Test
         run: npm test
       - name: Self-analyze (crap4js on its own source)
@@ -21,3 +24,54 @@ jobs:
         # Mirrors the crap4dart / crap4go CI self-analysis step.
         continue-on-error: true
         run: node src/cli.js
+      - name: Refresh CRAP + coverage badges
+        # Self-hosting: regenerate the README badges from this run's max CRAP
+        # and overall coverage, then commit them back so the badges stay live.
+        run: |
+          set +e
+          cov_out=$(npx c8 --reporter=json --reporter=text-summary node --test 2>&1)
+          set -e
+          cov=$(printf '%s\n' "$cov_out" | awk '/^Statements/ {gsub("%",""); print $3}')
+          if [ -z "$cov" ]; then
+            cov_val="N/A"; cov_color="#9f9f9f"
+          else
+            cov_val=$(awk -v c="$cov" 'BEGIN { printf "%.1f%%", c }')
+            cov_color=$(awk -v c="$cov" 'BEGIN {
+              if (c < 60)      print "#e05d44";
+              else if (c < 70) print "#fe7d37";
+              else if (c < 80) print "#dfb317";
+              else if (c < 90) print "#a4a61d";
+              else             print "#4c1";
+            }')
+          fi
+
+          set +e
+          crap_out=$(node src/cli.js 2>&1)
+          set -e
+          max=$(printf '%s\n' "$crap_out" | awk -F': ' '/^Max CRAP:/ {split($2, a, " "); print a[1]}')
+          if [ -z "$max" ]; then
+            max_val="N/A"; crap_color="#9f9f9f"
+          else
+            max_val=$(awk -v m="$max" 'BEGIN { printf "%.2f", m }')
+            crap_color=$(awk -v m="$max" 'BEGIN {
+              if (m <= 8.0)      print "#4c1";
+              else if (m <= 16.0) print "#dfb317";
+              else                print "#e05d44";
+            }')
+          fi
+
+          mkdir -p badges
+          node scripts/badge.mjs CRAP "$max_val" "$crap_color" badges/crap.svg
+          node scripts/badge.mjs coverage "$cov_val" "$cov_color" badges/coverage.svg
+          echo "max=$max_val color=$crap_color | cov=$cov_val color=$cov_color"
+      - name: Commit refreshed badges
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add badges/crap.svg badges/coverage.svg
+          if git diff --cached --quiet; then
+            echo "badges unchanged"
+          else
+            git commit -m "chore: refresh CRAP/coverage badges [skip ci]"
+            git push
+          fi
