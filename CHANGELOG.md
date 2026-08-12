@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.1.1...v0.2.0) (2026-08-12)
+
+
+### Features
+
+* parse JSX/Flow/TS via @babel/parser ([#9](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/9)) ([e164c4e](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/e164c4e50587f21393ba975a7b7e35daa427f060))
+
 ## [0.1.1](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.1.0...v0.1.1) (2026-08-11)
 
 
