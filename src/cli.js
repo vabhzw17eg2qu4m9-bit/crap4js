@@ -2,7 +2,7 @@
 // crap4js CLI entry point.
 //
 // Usage:
-//   crap4js                  Analyze all .js/.mjs/.cjs under src/.
+//   crap4js                  Analyze all .js/.jsx/.ts/.tsx/.mjs/.cjs under src/.
 //   crap4js --changed        Analyze git-changed files under src/.
 //   crap4js <path>...        Analyze explicit files / directories.
 //   crap4js --help           Print this help and exit 0.
@@ -24,7 +24,7 @@ const DEFAULT_COVERAGE = 'coverage/coverage-final.json';
 function usage() {
   return [
     'Usage:',
-    '  crap4js                  Analyze all .js/.mjs/.cjs files under src/',
+    '  crap4js                  Analyze all .js/.jsx/.ts/.tsx/.mjs/.cjs files under src/',
     '  crap4js --changed        Analyze git-changed source files under src/',
     '  crap4js <path>...        Analyze explicit files / directories (expanded)',
     '  crap4js --help           Print this help message',
@@ -142,11 +142,14 @@ function runWithOpts(opts, ctx) {
     return 0;
   }
   const coveragePath = resolveCoveragePath(opts, ctx.cwd);
-  const metrics = tryStep(ctx, () =>
+  const result = tryStep(ctx, () =>
     analyze({ filePaths: files, coveragePath, projectRoot: ctx.cwd }),
   );
-  if (metrics === FAIL) return 1;
-  ctx.out.write(formatReport(metrics, { threshold: opts.thresholdValue }));
+  if (result === FAIL) return 1;
+  const { metrics, parseFailures } = result;
+  ctx.out.write(
+    formatReport(metrics, { threshold: opts.thresholdValue, parseFailures }),
+  );
   return reportVerdict(metrics, opts.thresholdValue, ctx);
 }
 

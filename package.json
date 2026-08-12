@@ -14,7 +14,7 @@
     "node": ">=20"
   },
   "dependencies": {
-    "acorn": "^8.18.0"
+    "@babel/parser": "^8.0.4"
   },
   "devDependencies": {
     "c8": "^12.0.0"

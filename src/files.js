@@ -4,11 +4,15 @@ import { spawnSync } from 'node:child_process';
 import { readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 
-const SOURCE_EXTS = new Set(['.js', '.mjs', '.cjs']);
+const SOURCE_EXTS = new Set(['.js', '.mjs', '.cjs', '.jsx', '.ts', '.tsx']);
 const CHANGE_STATUS = new Set(['M', 'A', 'R', 'C', '?']);
 
+// Colocated test files — excluded so they don't pollute the production metric.
+const TEST_FILE_RE = /\.(spec|test)\.(js|jsx|ts|tsx)$/;
+
 /**
- * Recursively walk <root>/src/ for JavaScript source files (.js/.mjs/.cjs).
+ * Recursively walk <root>/src/ for JavaScript source files
+ * (.js/.mjs/.cjs/.jsx/.ts/.tsx), excluding test files.
  * Returns absolute paths, sorted.
  */
 export function findSourceFiles(projectRoot) {
@@ -66,7 +70,7 @@ function relativePath(line) {
   if (!line || line.length < 4) return null;
   if (!isChangeStatus(line[0]) && !isChangeStatus(line[1])) return null;
   const finalPath = renameTarget(line.slice(3).trim());
-  return SOURCE_EXTS.has(path.extname(finalPath)) ? finalPath : null;
+  return isSourcePath(finalPath) ? finalPath : null;
 }
 
 function inSrc(resolved, srcDir) {
@@ -90,7 +94,7 @@ export function expandPaths(args, projectRoot) {
     }
     if (st.isDirectory()) {
       for (const f of walkSourceDir(p)) result.add(f);
-    } else if (st.isFile() && SOURCE_EXTS.has(path.extname(p))) {
+    } else if (isSourceFile(p, st)) {
       result.add(p);
     }
   }
@@ -104,7 +108,7 @@ function walkSourceDir(dir) {
     const p = path.join(dir, e);
     const st = statOrSkip(p);
     if (st?.isDirectory()) out.push(...walkSourceDir(p));
-    else if (isSourceFile(e, st)) out.push(p);
+    else if (isSourceFile(p, st)) out.push(p);
   }
   return out.sort();
 }
@@ -125,8 +129,23 @@ function statOrSkip(p) {
   }
 }
 
-function isSourceFile(name, st) {
-  return st?.isFile() && SOURCE_EXTS.has(path.extname(name));
+/**
+ * True for colocated test files: `*.spec.{js,jsx,ts,tsx}`, `*.test.{...}`,
+ * and anything under a `__tests__/` directory. Used to keep the production
+ * CRAP metric clean.
+ */
+export function isTestFile(p) {
+  const norm = String(p).split(path.sep).join('/');
+  return norm.includes('/__tests__/') || TEST_FILE_RE.test(norm);
+}
+
+// A path is source if it has a source extension and is not a test file.
+function isSourcePath(p) {
+  return SOURCE_EXTS.has(path.extname(p)) && !isTestFile(p);
+}
+
+function isSourceFile(filePath, st) {
+  return st?.isFile() && isSourcePath(filePath);
 }
 
 function renameTarget(pathPart) {

@@ -21,10 +21,10 @@ const W_CRAP = 8;
  * Format the metrics array as a CRAP report string.
  *
  * @param {Array<object>} metrics  MethodMetric array (already sorted or not).
- * @param {{threshold: number}} opts
+ * @param {{threshold?: number, parseFailures?: string[]}} [opts]
  * @returns {string}
  */
-export function formatReport(metrics, { threshold } = {}) {
+export function formatReport(metrics, { threshold, parseFailures } = {}) {
   const t = threshold != null ? threshold : 8.0;
   const sorted = [...metrics].sort(compareMetricsForReport);
 
@@ -66,8 +66,14 @@ export function formatReport(metrics, { threshold } = {}) {
   const verdict = max > t ? 'FAILED' : 'passed';
   out += '\n';
   out += `Max CRAP: ${max.toFixed(1)} (threshold ${t.toFixed(1)}) — ${verdict}\n`;
+  out += parseFailureLine(parseFailures);
 
   return out;
+}
+
+function parseFailureLine(parseFailures) {
+  if (!parseFailures || parseFailures.length === 0) return '';
+  return `Parse failures: ${parseFailures.length} file(s) — see warnings above.\n`;
 }
 
 function compareMetricsForReport(a, b) {

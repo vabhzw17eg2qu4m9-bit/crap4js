@@ -35,7 +35,7 @@ function setupProject() {
 
 test('analyze returns MethodMetric with all expected fields', () => {
   const { root } = setupProject();
-  const metrics = analyze({
+  const { metrics } = analyze({
     filePaths: [path.join(root, 'src', 'sample.js')],
     coveragePath: path.join(root, 'coverage', 'coverage-final.json'),
     projectRoot: root,
@@ -52,7 +52,7 @@ test('analyze returns MethodMetric with all expected fields', () => {
 
 test('missing coverage file -> null coverage + null CRAP, with stderr warning', () => {
   const { root } = setupProject();
-  const metrics = analyze({
+  const { metrics } = analyze({
     filePaths: [path.join(root, 'src', 'sample.js')],
     coveragePath: path.join(root, 'coverage', 'does-not-exist.json'),
     projectRoot: root,
@@ -64,7 +64,7 @@ test('missing coverage file -> null coverage + null CRAP, with stderr warning', 
 
 test('coverage path null -> null coverage + null CRAP', () => {
   const { root } = setupProject();
-  const metrics = analyze({
+  const { metrics } = analyze({
     filePaths: [path.join(root, 'src', 'sample.js')],
     coveragePath: null,
     projectRoot: root,
@@ -97,7 +97,7 @@ export function noCov() { return 1; }
   mkdirSync(path.join(root, 'coverage'));
   writeFileSync(path.join(root, 'coverage', 'coverage-final.json'), JSON.stringify(coverage));
 
-  const metrics = analyze({
+  const { metrics } = analyze({
     filePaths: [path.join(root, 'src', 'sample.js')],
     coveragePath: path.join(root, 'coverage', 'coverage-final.json'),
     projectRoot: root,
@@ -107,4 +107,24 @@ export function noCov() { return 1; }
   // noCov: no statement in range -> null
   const names = metrics.map((m) => m.methodName);
   assert.deepEqual(names, ['high', 'low', 'noCov']);
+});
+
+test('parse failures are collected and surfaced alongside metrics', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'crap4js-parsefail-'));
+  mkdirSync(path.join(root, 'src'));
+  writeFileSync(path.join(root, 'src', 'good.js'), 'export function ok() { return 1; }\n');
+  // `}}}` throws even with errorRecovery — simulates a genuinely broken file.
+  writeFileSync(path.join(root, 'src', 'broken.js'), '}}}\n');
+
+  const { metrics, parseFailures } = analyze({
+    filePaths: [
+      path.join(root, 'src', 'good.js'),
+      path.join(root, 'src', 'broken.js'),
+    ],
+    coveragePath: null,
+    projectRoot: root,
+  });
+  assert.equal(metrics.length, 1);
+  assert.equal(metrics[0].methodName, 'ok');
+  assert.deepEqual(parseFailures, ['src/broken.js']);
 });

@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 
-import { changedFiles, isChangeStatus, parseStatusLine } from '../src/files.js';
+import { changedFiles, isChangeStatus, parseStatusLine, isTestFile } from '../src/files.js';
 
 // ---------- isChangeStatus ----------
 
@@ -35,7 +35,7 @@ test('parseStatusLine: null for blank / short lines', () => {
 test('parseStatusLine: null for non-source extension', () => {
   assert.equal(parseStatusLine('M  src/notes.txt', ROOT, SRC), null);
   assert.equal(parseStatusLine('?? src/data.json', ROOT, SRC), null);
-  assert.equal(parseStatusLine('A  src/app.ts', ROOT, SRC), null);
+  assert.equal(parseStatusLine('A  src/README.md', ROOT, SRC), null);
 });
 
 test('parseStatusLine: null for path outside src/', () => {
@@ -156,5 +156,38 @@ test('changedFiles: throws when git status fails (not a git repo)', () => {
     assert.throws(() => changedFiles(root), /git status failed/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// ---------- isTestFile ----------
+
+test('isTestFile: true for *.spec/*.test across js/jsx/ts/tsx and __tests__/', () => {
+  for (const p of [
+    'src/foo.spec.js',
+    'src/foo.test.js',
+    'src/foo.spec.jsx',
+    'src/foo.test.jsx',
+    'src/foo.spec.ts',
+    'src/foo.test.ts',
+    'src/foo.spec.tsx',
+    'src/foo.test.tsx',
+    'src/__tests__/thing.js',
+    'src/a/__tests__/b/sub.js',
+  ]) {
+    assert.equal(isTestFile(p), true, `expected ${p} to be a test file`);
+  }
+});
+
+test('isTestFile: false for production source', () => {
+  for (const p of [
+    'src/foo.js',
+    'src/foo.jsx',
+    'src/foo.ts',
+    'src/foo.tsx',
+    'src/components/Card.jsx',
+    'src/spec.js',
+    'src/test.js',
+  ]) {
+    assert.equal(isTestFile(p), false, `expected ${p} to NOT be a test file`);
   }
 });

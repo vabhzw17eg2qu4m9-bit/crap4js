@@ -91,3 +91,41 @@ test('FAILED verdict when max > threshold', () => {
   const out = formatReport(metrics, { threshold: 8.0 });
   assert.match(out, /Max CRAP: 30\.0 \(threshold 8\.0\) — FAILED/);
 });
+
+test('parse failures: summary line appended after Max CRAP when count > 0', () => {
+  const metrics = [
+    {
+      methodName: 'm',
+      file: 'src/m.js',
+      startLine: 1,
+      complexity: 2,
+      coverage: 1,
+      crapScore: 2.0,
+    },
+  ];
+  const out = formatReport(metrics, {
+    threshold: 8.0,
+    parseFailures: ['src/a.js', 'src/b.js', 'src/c.js'],
+  });
+  const lines = out.split('\n');
+  const maxIdx = lines.findIndex((l) => l.startsWith('Max CRAP:'));
+  assert.ok(maxIdx >= 0);
+  assert.match(lines[maxIdx + 1], /^Parse failures: 3 file\(s\) — see warnings above\./);
+});
+
+test('no parse-failure line when parseFailures omitted or empty', () => {
+  const metrics = [
+    {
+      methodName: 'm',
+      file: 'src/m.js',
+      startLine: 1,
+      complexity: 2,
+      coverage: 1,
+      crapScore: 2.0,
+    },
+  ];
+  for (const opts of [{ threshold: 8.0 }, { threshold: 8.0, parseFailures: [] }]) {
+    const out = formatReport(metrics, opts);
+    assert.ok(!out.includes('Parse failures'));
+  }
+});
