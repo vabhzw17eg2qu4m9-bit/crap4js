@@ -19,19 +19,28 @@ import { crapScore } from './crapScore.js';
  * Analyze a set of source files, combining complexity and coverage.
  *
  * @param {{ filePaths: string[], coveragePath: string|null, projectRoot: string }} opts
- * @returns {Array<object>} Sorted MethodMetric array.
+ * @returns {{ metrics: Array<object>, parseFailures: string[] }}
+ *   Sorted MethodMetric array plus relative paths of files that failed to parse.
  */
 export function analyze({ filePaths, coveragePath, projectRoot }) {
   const warn = (msg) => process.stderr.write(`Warning: ${msg}\n`);
   const coverageMap = loadCoverageMap(coveragePath, projectRoot, warn);
 
   const metrics = [];
+  const parseFailures = [];
   for (const file of filePaths) {
-    metrics.push(...analyzeFile(file, projectRoot, coverageMap, warn));
+    const { metrics: fileMetrics, failures } = analyzeFile(
+      file,
+      projectRoot,
+      coverageMap,
+      warn,
+    );
+    metrics.push(...fileMetrics);
+    parseFailures.push(...failures);
   }
 
   metrics.sort(compareMetrics);
-  return metrics;
+  return { metrics, parseFailures };
 }
 
 function loadCoverageMap(coveragePath, projectRoot, warn) {
@@ -52,13 +61,15 @@ function analyzeFile(file, projectRoot, coverageMap, warn) {
   const rel = path.relative(projectRoot, file).split(path.sep).join('/');
   let methods;
   try {
-    methods = extractMethods(readFileSync(file, 'utf8'));
+    methods = extractMethods(readFileSync(file, 'utf8'), {
+      ext: path.extname(file),
+    });
   } catch (e) {
     warn(`failed to parse ${rel}: ${e.message}`);
-    return [];
+    return { metrics: [], failures: [rel] };
   }
   const fileCoverage = coverageMap ? coverageMap.get(rel) : null;
-  return methods.map((m) => {
+  const metrics = methods.map((m) => {
     const coverage = coverageForMethod(fileCoverage, m.startLine, m.endLine);
     return {
       methodName: m.name,
@@ -69,6 +80,7 @@ function analyzeFile(file, projectRoot, coverageMap, warn) {
       crapScore: crapScore(m.complexity, coverage),
     };
   });
+  return { metrics, failures: [] };
 }
 
 export function compareMetrics(a, b) {

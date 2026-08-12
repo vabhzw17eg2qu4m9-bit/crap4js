@@ -230,3 +230,62 @@ test('leftName: nested MemberExpression (a.b.c)', () => {
   };
   assert.equal(leftName(member), 'a.b.c');
 });
+
+// ---------- @babel/parser: JSX / Flow / TypeScript ----------
+
+test('JSX: component returning <div> JSX parses and is counted', () => {
+  const src = `
+export function Card({ title }) {
+  return <div className="card">{title}</div>;
+}
+`;
+  const methods = extractMethods(src);
+  const m = find(methods, 'Card');
+  assert.ok(m, 'Card component not extracted');
+  assert.equal(m.complexity, 1);
+});
+
+test('Flow: // @flow type alias + annotated destructured param parses', () => {
+  const src = `
+// @flow
+type FooProps = { value: boolean };
+export function Foo({ value }: { value: boolean }) {
+  if (value) return 'on';
+  return 'off';
+}
+`;
+  const methods = extractMethods(src);
+  const m = find(methods, 'Foo');
+  assert.ok(m, 'Foo not extracted (acorn would have thrown on the type annotation)');
+  // base 1 + if 1 = 2
+  assert.equal(m.complexity, 2);
+});
+
+test('TypeScript: interface + typed function parses (ext-routed)', () => {
+  const src = `
+interface User { id: number; name: string; }
+export function greet(u: User): string {
+  if (u.id > 0) return u.name;
+  return 'unknown';
+}
+`;
+  const methods = extractMethods(src, { ext: '.ts' });
+  const m = find(methods, 'greet');
+  assert.ok(m, 'greet not extracted');
+  assert.equal(m.complexity, 2);
+});
+
+test('class private method is named ClassName.#method and counted', () => {
+  const src = `
+class Counter {
+  #bump(a) {
+    if (a) return 1;
+    return 0;
+  }
+}
+`;
+  const methods = extractMethods(src);
+  const m = find(methods, 'Counter.#bump');
+  assert.ok(m, 'private method not extracted');
+  assert.equal(m.complexity, 2);
+});

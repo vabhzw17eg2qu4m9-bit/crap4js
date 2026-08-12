@@ -1,8 +1,10 @@
-// Cyclomatic complexity + method extraction for JavaScript source.
+// Cyclomatic complexity + method extraction for JavaScript/JSX/Flow/TS source.
 //
-// Uses acorn to parse, then walks the AST to find every function-like entry
-// (FunctionDeclaration, class MethodDefinition, assigned FunctionExpression
-// or ArrowFunctionExpression) and computes its cyclomatic complexity.
+// Uses @babel/parser (plugins routed by file extension — flow and typescript
+// cannot be enabled together) to parse, then walks the AST to find every
+// function-like entry (FunctionDeclaration, class ClassMethod, assigned
+// FunctionExpression or ArrowFunctionExpression) and computes its cyclomatic
+// complexity.
 //
 // Counting rules (base 1, +1 each): IfStatement, ForStatement, ForInStatement,
 // ForOfStatement, WhileStatement, DoWhileStatement, CatchClause, SwitchCase
@@ -13,7 +15,7 @@
 // them when computing the parent's complexity). Nested NAMED
 // FunctionDeclarations are skipped — they are reported as their own entries.
 
-import { parse } from 'acorn';
+import { parse } from '@babel/parser';
 
 const COMPLEXITY_TYPES = new Set([
   'IfStatement',
@@ -31,22 +33,46 @@ const LOGICAL_OPS = new Set(['&&', '||']);
 
 const FUNCTION_LIKE = new Set(['FunctionExpression', 'ArrowFunctionExpression']);
 
-const SKIP_KEYS = new Set(['type', 'loc', 'start', 'end', 'range', 'sourceType']);
+// Babel attaches extra keys the generic traversal should not descend into
+// (comment arrays, raw-source `extra`, `directives`, byte offsets). acorn's
+// `range`/`sourceType` are kept for safety even though acorn is no longer used.
+const SKIP_KEYS = new Set([
+  'type', 'loc', 'range', 'sourceType', 'start', 'end',
+  'leadingComments', 'trailingComments', 'innerComments', 'extra', 'directives',
+]);
+
+// Shared by both plugin routes; only the type-syntax plugin differs because
+// @babel/parser refuses to combine flow and typescript.
+const COMMON_PLUGINS = [
+  'jsx', 'decorators-legacy', 'classProperties', 'classPrivateProperties',
+  'classPrivateMethods', 'objectRestSpread', 'optionalChaining',
+  'nullishCoalescingOperator', 'dynamicImport', 'exportDefaultFrom',
+  'asyncGenerators', 'topLevelAwait',
+];
+const FLOW_PLUGINS = [...COMMON_PLUGINS, 'flow'];
+const TS_PLUGINS = [...COMMON_PLUGINS, 'typescript'];
+const TS_EXTS = new Set(['.ts', '.tsx']);
 
 /**
  * Parse source and return every method/function entry with its complexity.
  *
- * @param {string} source  JavaScript source code.
+ * @param {string} source  JavaScript/JSX/Flow/TypeScript source code.
+ * @param {{ ext?: string }} [opts]  File extension used to route the
+ *   flow-vs-typescript plugin (`.ts`/`.tsx` → typescript, else flow).
  * @returns {Array<{name: string, startLine: number, endLine: number, complexity: number}>}
  */
-export function extractMethods(source) {
+export function extractMethods(source, { ext } = {}) {
+  const plugins = TS_EXTS.has(ext) ? TS_PLUGINS : FLOW_PLUGINS;
   const ast = parse(source, {
-    ecmaVersion: 'latest',
     sourceType: 'module',
-    locations: true,
+    allowImportExportEverywhere: true,
+    allowReturnOutsideFunction: true,
+    errorRecovery: true,
+    plugins,
   });
   const methods = [];
-  walkForEntries(ast, null, methods);
+  // @babel/parser wraps the Program in a File node; the walker starts at Program.
+  walkForEntries(ast.program, null, methods);
   return methods;
 }
 
@@ -62,12 +88,11 @@ const HANDLERS = {
     if (!node.body) return;
     methods.push(makeMethod(node.id?.name ?? '<anonymous>', node));
   },
-  MethodDefinition(node, className, methods) {
-    if (node.kind === 'constructor') return;
-    if (!node.value?.body) return;
-    const mn = keyName(node.key);
-    methods.push(makeMethod(className ? `${className}.${mn}` : mn, node.value));
-  },
+  // @babel/parser names class methods ClassMethod/ClassPrivateMethod (acorn
+  // called them MethodDefinition). The method node itself carries body/params,
+  // so makeMethod reads loc/complexity off it directly.
+  ClassMethod: classMethodHandler,
+  ClassPrivateMethod: classMethodHandler,
   VariableDeclarator(node, className, methods) {
     if (!node.init?.body || !FUNCTION_LIKE.has(node.init.type)) return;
     methods.push(makeMethod(node.id?.name ?? '<anonymous>', node.init));
@@ -76,8 +101,14 @@ const HANDLERS = {
     if (!node.right?.body || !FUNCTION_LIKE.has(node.right.type)) return;
     methods.push(makeMethod(leftName(node.left), node.right));
   },
-  Property(node, className, methods) {
-    // Object-literal method shorthand or `{ key: function () {} }`.
+  // Object-literal shorthand `{ m() {} }` → ObjectMethod (body inline).
+  ObjectMethod(node, className, methods) {
+    if (!node.body) return;
+    methods.push(makeMethod(keyName(node.key), node));
+  },
+  // Object-literal keyed function `{ m: function () {} }` → ObjectProperty
+  // whose value is the function (acorn called both shapes Property).
+  ObjectProperty(node, className, methods) {
     if (!node.value?.body || !FUNCTION_LIKE.has(node.value.type)) return;
     methods.push(makeMethod(keyName(node.key), node.value));
   },
@@ -101,6 +132,15 @@ function classHandler(node, className, methods) {
   const cn = node.id?.name ?? className;
   for (const child of node.body?.body ?? []) walkForEntries(child, cn, methods);
   return SKIP;
+}
+
+// Shared by ClassMethod and ClassPrivateMethod: the node itself is the function
+// (Babel), so loc/complexity come straight off it. Constructors are excluded.
+function classMethodHandler(node, className, methods) {
+  if (node.kind === 'constructor') return;
+  if (!node.body) return;
+  const mn = keyName(node.key);
+  methods.push(makeMethod(className ? `${className}.${mn}` : mn, node));
 }
 
 function walkForEntries(node, className, methods) {
@@ -175,9 +215,9 @@ function isNamedFunctionDecl(n) {
 
 function keyName(key) {
   if (!key) return '<anonymous>';
-  if (key.type === 'Identifier' || key.type === 'PrivateIdentifier') {
-    return key.type === 'PrivateIdentifier' ? '#' + key.name : key.name;
-  }
+  if (key.type === 'Identifier') return key.name;
+  // @babel/parser private-method key is PrivateName ({ id: { name } }).
+  if (key.type === 'PrivateName') return '#' + key.id?.name;
   if (key.type === 'Literal') return String(key.value);
   return '<anonymous>';
 }
