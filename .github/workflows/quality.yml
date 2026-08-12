@@ -2,11 +2,18 @@ name: Quality
 
 on: [push, pull_request]
 
+# Workflow-level READ so the default for every job is read-only. The `quality`
+# job inherits this and therefore never triggers GitHub's per-PR "Approve and
+# run" gate (which only fires for PR workflows with WRITE perms). Only
+# `commit-badges` elevates to write, and it is push-only.
+permissions:
+  contents: read
+
 jobs:
   quality:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    # Inherits workflow-level contents: read — read-only, so pull_request
+    # runs need no maintainer approval.
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -25,11 +32,28 @@ jobs:
         # the real coverage just generated. Hard 8.0 gate — reports genuine
         # per-method Cov% and Max CRAP. Mirrors the crap4py CI self-analysis.
         run: node src/cli.js --coverage coverage/coverage-final.json
-      - name: Refresh CRAP + coverage badges
-        # Self-hosting: derive both badge values from the real coverage just
-        # generated above, then commit the refreshed SVGs back.
-        if: github.event_name == 'push' && github.actor != 'github-actions[bot]'
+
+  commit-badges:
+    needs: quality
+    # Push-only + bot-gated: never runs on pull_request, so it can never be
+    # the job that demands per-PR approval.
+    if: github.event_name == 'push' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Recompute CRAP + coverage badges
+        # Recompute from a fresh coverage run (no cross-job artifact); same
+        # derive logic the old Refresh step used.
         run: |
+          npx c8 --reporter=json --reporter=text --include='src/**/*.js' node --test
+
           cov=$(node -e "const c=require('./coverage/coverage-final.json');let t=0,h=0;for(const f in c){const s=c[f].s||{};for(const k in s){t++;if(s[k]>0)h++;}}console.log(t?(100*h/t).toFixed(1):'0.0')")
           if [ -z "$cov" ]; then
             cov_val="N/A"; cov_color="#9f9f9f"
@@ -64,7 +88,7 @@ jobs:
           node scripts/badge.mjs coverage "$cov_val" "$cov_color" badges/coverage.svg
           echo "max=$max_val color=$crap_color | cov=$cov_val color=$cov_color"
       - name: Commit refreshed badges
-        if: github.event_name == 'push' && github.actor != 'github-actions[bot]'
+        # continue-on-error: a protection-rejected push must not fail the run.
         continue-on-error: true
         run: |
           git config user.name "github-actions[bot]"
