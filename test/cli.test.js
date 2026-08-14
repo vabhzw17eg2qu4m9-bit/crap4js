@@ -179,3 +179,37 @@ test('explicit positional path is analyzed', () => {
     cleanup(root);
   }
 });
+
+test('gate subcommands dispatch on the first argument', () => {
+  const r = runCli(process.cwd(), ['banned-imports']);
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /no rules configured/);
+});
+
+test('whole-project gate skips on explicit path selection (exit 0)', () => {
+  const r = runCli(process.cwd(), ['unused-files', 'src']);
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /not meaningful for a partial selection/);
+});
+
+test('banned-imports usage error exits 1', () => {
+  const r = runCli(process.cwd(), ['banned-imports', '--from', 'a']);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /--from\/--forbid must come in pairs/);
+});
+
+test('nesting violation over an explicit file exits 2', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'crap4js-gate-'));
+  try {
+    mkdirSync(path.join(root, 'src'));
+    writeFileSync(
+      path.join(root, 'src', 'deep.js'),
+      'function d(a) { if (a) { if (a) { if (a) { if (a) { if (a) {} } } } } }\n',
+    );
+    const r = runCli(root, ['nesting', 'src/deep.js']);
+    assert.equal(r.status, 2);
+    assert.match(r.stdout, /d nesting=6 > max 5/);
+  } finally {
+    cleanup(root);
+  }
+});

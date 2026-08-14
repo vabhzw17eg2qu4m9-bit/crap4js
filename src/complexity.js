@@ -80,18 +80,29 @@ export function extractMethodsWithNodes(source, { ext } = {}) {
 }
 
 function parseMethods(source, ext) {
+  const ast = parseSource(source, ext);
+  const methods = [];
+  // @babel/parser wraps the Program in a File node; the walker starts at Program.
+  walkForEntries(ast.program, null, methods);
+  return methods;
+}
+
+/**
+ * Parse source with the port's standard plugin routing. Shared by the
+ * gate-check subcommands so every check sees the same AST.
+ *
+ * @param {string} source
+ * @param {string} [ext]  File extension routing flow vs typescript plugins.
+ */
+export function parseSource(source, ext) {
   const plugins = TS_EXTS.has(ext) ? TS_PLUGINS : FLOW_PLUGINS;
-  const ast = parse(source, {
+  return parse(source, {
     sourceType: 'module',
     allowImportExportEverywhere: true,
     allowReturnOutsideFunction: true,
     errorRecovery: true,
     plugins,
   });
-  const methods = [];
-  // @babel/parser wraps the Program in a File node; the walker starts at Program.
-  walkForEntries(ast.program, null, methods);
-  return methods;
 }
 
 // Sentinel: a handler returns this when it has already descended into the
@@ -182,7 +193,7 @@ function visitChildren(node, className, methods) {
   }
 }
 
-function isNode(v) {
+export function isNode(v) {
   return v && typeof v === 'object' && v.type;
 }
 
@@ -196,7 +207,7 @@ function makeMethod(name, fnNode) {
   };
 }
 
-function computeComplexity(root) {
+export function computeComplexity(root) {
   let cc = 1;
   const visit = (n) => {
     if (!isNode(n)) return;
@@ -217,7 +228,7 @@ function complexityDelta(n) {
   return 0;
 }
 
-function childrenOf(n) {
+export function childrenOf(n) {
   const out = [];
   for (const key of Object.keys(n)) {
     if (SKIP_KEYS.has(key)) continue;

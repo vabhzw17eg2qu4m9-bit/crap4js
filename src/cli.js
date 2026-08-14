@@ -11,13 +11,22 @@
 //   crap4js --run-tests      Run `nyc node --test` before analyzing.
 //   crap4js profile [...]    Run instrumented tests and report per-function timing.
 //   crap4js file-naming [...]  Flag mechanical file names (generic/numeric stems).
+//   crap4js nesting [...]    Fail functions nested deeper than 5 levels.
+//   crap4js class-size [...]  Fail god classes (>25 methods or WMC > 80).
+//   crap4js weight-of-class [...]  Fail data-heavy classes (fields ratio > 0.33).
+//   crap4js unused-code [...]  Flag module-private declarations never referenced.
+//   crap4js unused-files [...]  Flag source files never imported.
+//   crap4js banned-imports [--from G --forbid G --message M]... [paths...]
+//                            Enforce architectural import boundaries.
 //   crap4js skill            Print the crap4js profiling skill for AI agents.
 //
 // The first argument selects a subcommand when it is exactly `profile`,
-// `file-naming`, or `skill`; anything else is analyzed as before.
+// `file-naming`, `nesting`, `class-size`, `weight-of-class`, `unused-code`,
+// `unused-files`, `banned-imports`, or `skill`; anything else is analyzed
+// as before.
 //
-// Exit codes: 0 success; 1 usage error; 2 CRAP/profile/file-naming threshold
-// exceeded.
+// Exit codes: 0 success; 1 usage error; 2 CRAP/profile threshold exceeded
+// or gate-check violations.
 
 import path from 'node:path';
 import { analyze } from './analyzer.js';
@@ -25,6 +34,12 @@ import { formatReport } from './report.js';
 import { changedFiles, expandPaths, findSourceFiles } from './files.js';
 import { runTests } from './runtests.js';
 import { runFileNaming } from './fileNaming.js';
+import { runNesting } from './nesting.js';
+import { runClassSize } from './classSize.js';
+import { runWeightOfClass } from './weightOfClass.js';
+import { runUnusedCode } from './unusedCode.js';
+import { runUnusedFiles } from './unusedFiles.js';
+import { runBannedImports } from './bannedImports.js';
 import { parseProfileArgs, runProfile } from './profile.js';
 import { runSkill } from './skill.js';
 
@@ -45,6 +60,18 @@ function usage() {
     '                           Run instrumented tests and report per-function timing',
     '  crap4js file-naming [paths...]',
     '                           Flag mechanical file names (generic/numeric stems)',
+    '  crap4js nesting [paths...]',
+    '                           Fail functions whose control-flow nesting exceeds 5',
+    '  crap4js class-size [paths...]',
+    '                           Fail classes with >25 methods or WMC >80',
+    '  crap4js weight-of-class [paths...]',
+    '                           Fail classes whose public-instance field ratio exceeds 0.33',
+    '  crap4js unused-code [paths...]',
+    '                           Flag module-private declarations never referenced',
+    '  crap4js unused-files [paths...]',
+    '                           Flag source files never imported by analyzed sources',
+    '  crap4js banned-imports [--from GLOB --forbid GLOB --message MSG]... [paths...]',
+    '                           Enforce architectural import boundaries',
     '  crap4js skill            Print the crap4js profiling skill for AI agents',
     '',
   ].join('\n');
@@ -55,6 +82,12 @@ function usage() {
 const SUBCOMMANDS = {
   profile: (args, ctx) => runProfile(parseProfileArgs(args), ctx),
   'file-naming': (args, ctx) => runFileNaming(args, ctx),
+  nesting: (args, ctx) => runNesting(args, ctx),
+  'class-size': (args, ctx) => runClassSize(args, ctx),
+  'weight-of-class': (args, ctx) => runWeightOfClass(args, ctx),
+  'unused-code': (args, ctx) => runUnusedCode(args, ctx),
+  'unused-files': (args, ctx) => runUnusedFiles(args, ctx),
+  'banned-imports': (args, ctx) => runBannedImports(args, ctx),
   skill: (_args, ctx) => runSkill(ctx),
 };
 
