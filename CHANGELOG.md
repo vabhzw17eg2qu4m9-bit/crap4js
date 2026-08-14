@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.2.0...v0.3.0) (2026-08-14)
+
+
+### Features
+
+* port profile/skill/file-naming commands from crap4dart 0.4.0 ([#12](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/12)) ([fb06082](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/fb0608203f79d1a1c3195d4c2c2bb5cf4ff31054))
+
 ## [0.2.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.1.1...v0.2.0) (2026-08-12)
 
 
