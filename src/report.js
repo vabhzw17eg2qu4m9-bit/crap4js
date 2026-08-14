@@ -101,12 +101,12 @@ function formatCrap(score) {
   return score.toFixed(1);
 }
 
-function padLeft(s, w) {
+export function padLeft(s, w) {
   s = String(s);
   return s.length >= w ? s : ' '.repeat(w - s.length) + s;
 }
 
-function padRight(s, w) {
+export function padRight(s, w) {
   s = String(s);
   return s.length >= w ? s : s + ' '.repeat(w - s.length);
 }

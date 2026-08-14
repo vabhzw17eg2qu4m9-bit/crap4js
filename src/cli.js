@@ -9,14 +9,24 @@
 //   crap4js --coverage <p>   Override coverage file (default coverage/coverage-final.json).
 //   crap4js --threshold <n>  Override CRAP threshold (default 8.0).
 //   crap4js --run-tests      Run `nyc node --test` before analyzing.
+//   crap4js profile [...]    Run instrumented tests and report per-function timing.
+//   crap4js file-naming [...]  Flag mechanical file names (generic/numeric stems).
+//   crap4js skill            Print the crap4js profiling skill for AI agents.
 //
-// Exit codes: 0 success; 1 usage error; 2 CRAP threshold exceeded.
+// The first argument selects a subcommand when it is exactly `profile`,
+// `file-naming`, or `skill`; anything else is analyzed as before.
+//
+// Exit codes: 0 success; 1 usage error; 2 CRAP/profile/file-naming threshold
+// exceeded.
 
 import path from 'node:path';
 import { analyze } from './analyzer.js';
 import { formatReport } from './report.js';
 import { changedFiles, expandPaths, findSourceFiles } from './files.js';
 import { runTests } from './runtests.js';
+import { runFileNaming } from './fileNaming.js';
+import { parseProfileArgs, runProfile } from './profile.js';
+import { runSkill } from './skill.js';
 
 const DEFAULT_THRESHOLD = 8.0;
 const DEFAULT_COVERAGE = 'coverage/coverage-final.json';
@@ -31,9 +41,22 @@ function usage() {
     '  crap4js --coverage <p>   Override coverage file (default: ' + DEFAULT_COVERAGE + ')',
     '  crap4js --threshold <n>  Override CRAP threshold (default: ' + DEFAULT_THRESHOLD + ')',
     '  crap4js --run-tests      Run the test+coverage suite before analyzing',
+    '  crap4js profile [--name <p>] [--threshold <ms>] [--top <N>] [paths...]',
+    '                           Run instrumented tests and report per-function timing',
+    '  crap4js file-naming [paths...]',
+    '                           Flag mechanical file names (generic/numeric stems)',
+    '  crap4js skill            Print the crap4js profiling skill for AI agents',
     '',
   ].join('\n');
 }
+
+// Subcommand dispatch on the FIRST argument only. Each command parses its
+// own flags, prints via ctx, and returns its exit code.
+const SUBCOMMANDS = {
+  profile: (args, ctx) => runProfile(parseProfileArgs(args), ctx),
+  'file-naming': (args, ctx) => runFileNaming(args, ctx),
+  skill: (_args, ctx) => runSkill(ctx),
+};
 
 const SIMPLE_FLAGS = {
   '--help': 'help',
@@ -121,6 +144,9 @@ const FAIL = Symbol('fail');
 function main(argv, streams = {}) {
   const ctx = context(streams);
 
+  const sub = dispatchSubcommand(argv, ctx);
+  if (sub !== null) return sub;
+
   const opts = tryStep(ctx, () => parseArgs(argv));
   if (opts === FAIL) {
     ctx.out.write(usage());
@@ -131,6 +157,15 @@ function main(argv, streams = {}) {
     return 0;
   }
   return runWithOpts(opts, ctx);
+}
+
+// Runs the subcommand named by argv[0] when there is one; returns null when
+// the first argument is a flag/path and the analyze path should take over.
+function dispatchSubcommand(argv, ctx) {
+  const run = SUBCOMMANDS[argv[0]];
+  if (!run) return null;
+  const code = tryStep(ctx, () => run(argv.slice(1), ctx));
+  return code === FAIL ? 1 : code;
 }
 
 function runWithOpts(opts, ctx) {
