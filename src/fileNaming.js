@@ -4,7 +4,7 @@
 // Port of crap4dart's file_naming gate (0.4.0).
 
 import path from 'node:path';
-import { expandPaths, findSourceFiles, isTestFile } from './files.js';
+import { gateFiles, toRelPath } from './files.js';
 
 // Lower-cased generic stems with no domain meaning. Files with these names
 // accumulate unrelated declarations over time.
@@ -52,9 +52,7 @@ const NUMERIC_SUFFIX_RE = /[a-z_][0-9]+$/;
  * @returns {string[]} absolute file paths
  */
 export function namingFiles(paths, projectRoot) {
-  const files =
-    paths.length > 0 ? expandPaths(paths, projectRoot) : findSourceFiles(projectRoot);
-  return files.filter((f) => !isTestPath(f));
+  return gateFiles(paths, projectRoot);
 }
 
 /**
@@ -69,7 +67,7 @@ export function namingViolations(files, projectRoot) {
   for (const file of files) {
     const message = violationFor(file);
     if (message) {
-      violations.push({ file: relPath(file, projectRoot), message });
+      violations.push({ file: toRelPath(file, projectRoot), message });
     }
   }
   return { violations, checked: files.length };
@@ -115,16 +113,4 @@ function violationFor(file) {
     return `numeric suffix in "${base}" — split by domain instead of numbered parts (batch1, part2, v2 ...)`;
   }
   return null;
-}
-
-// True for colocated test files and anything under a test/tests/__tests__
-// directory segment (checked on directory names only, so src/testing.js
-// stays a normal source file).
-function isTestPath(p) {
-  const norm = String(p).split(path.sep).join('/');
-  return isTestFile(norm) || /(^|\/)(test|tests)\//.test(norm);
-}
-
-function relPath(file, projectRoot) {
-  return path.relative(projectRoot, file).split(path.sep).join('/');
 }

@@ -135,8 +135,28 @@ function statOrSkip(p) {
  * CRAP metric clean.
  */
 export function isTestFile(p) {
+  return TEST_FILE_RE.test(p) || p.split(path.sep).join('/').includes('/__tests__/');
+}
+
+// True for colocated test files and anything under a test/tests/__tests__
+// directory segment (checked on directory names only, so src/testing.js
+// stays a normal source file). Shared by the gate-check subcommands.
+export function isTestPath(p) {
   const norm = String(p).split(path.sep).join('/');
-  return norm.includes('/__tests__/') || TEST_FILE_RE.test(norm);
+  return isTestFile(norm) || /(^|\/)(test|tests)\//.test(norm);
+}
+
+// Files a gate-check subcommand applies to: explicit CLI paths (expanded)
+// or the default src/ walk — test files and test directories excluded.
+export function gateFiles(paths, projectRoot) {
+  const files =
+    paths.length > 0 ? expandPaths(paths, projectRoot) : findSourceFiles(projectRoot);
+  return files.filter((f) => !isTestPath(f));
+}
+
+// Project-relative POSIX path (forward slashes) for report lines.
+export function toRelPath(file, projectRoot) {
+  return path.relative(projectRoot, file).split(path.sep).join('/');
 }
 
 // A path is source if it has a source extension and is not a test file.
