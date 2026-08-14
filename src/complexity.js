@@ -62,6 +62,24 @@ const TS_EXTS = new Set(['.ts', '.tsx']);
  * @returns {Array<{name: string, startLine: number, endLine: number, complexity: number}>}
  */
 export function extractMethods(source, { ext } = {}) {
+  // Strip the AST node reference — external callers only need the summary.
+  return parseMethods(source, ext).map(({ node, ...m }) => m);
+}
+
+/**
+ * Same walk as extractMethods, but each entry also keeps a reference to the
+ * function AST node. Used by the `profile` command's instrumenter to wrap
+ * the exact bodies the analyzer reports.
+ *
+ * @param {string} source
+ * @param {{ ext?: string }} [opts]
+ * @returns {Array<{name: string, startLine: number, endLine: number, complexity: number, node: object}>}
+ */
+export function extractMethodsWithNodes(source, { ext } = {}) {
+  return parseMethods(source, ext);
+}
+
+function parseMethods(source, ext) {
   const plugins = TS_EXTS.has(ext) ? TS_PLUGINS : FLOW_PLUGINS;
   const ast = parse(source, {
     sourceType: 'module',
@@ -174,6 +192,7 @@ function makeMethod(name, fnNode) {
     startLine: fnNode.loc.start.line,
     endLine: fnNode.loc.end.line,
     complexity: computeComplexity(fnNode.body),
+    node: fnNode,
   };
 }
 

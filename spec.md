@@ -34,10 +34,17 @@ crap4js --help           Print this help and exit 0.
 crap4js --coverage <p>   Override coverage file (default: coverage/coverage-final.json).
 crap4js --threshold <n>  Override CRAP threshold (default: 8.0).
 crap4js --run-tests      Run the test+coverage suite before analyzing.
+crap4js profile [--name <p>] [--threshold <ms>] [--top <N>] [paths...]
+                         Run instrumented tests, report per-function timing.
+crap4js file-naming [paths...]
+                         Flag mechanical file names (generic/numeric stems).
+crap4js skill            Print the crap4js profiling skill for AI agents.
 ```
 
-`--changed` is mutually exclusive with explicit paths. Unknown flags are a
-usage error (exit 1).
+The first argument selects a subcommand when it is exactly `profile`,
+`file-naming`, or `skill`; anything else (flags, paths) is analyzed as the
+CRAP command above. `--changed` is mutually exclusive with explicit paths.
+Unknown flags are a usage error (exit 1).
 
 ## File Selection
 
@@ -153,7 +160,7 @@ threshold; otherwise `passed`.
 |------|-----------------------------------------------------------------------------|
 | `0`  | Success (including empty selection, or max numeric CRAP ≤ threshold).       |
 | `1`  | CLI usage error (bad flag, bad threshold, `--changed` + paths, unreadable). |
-| `2`  | CRAP threshold exceeded. `CRAP threshold exceeded: <max> > <threshold>` is printed to stderr. |
+| `2`  | CRAP threshold exceeded (`CRAP threshold exceeded: <max> > <threshold>` on stderr), profile threshold exceeded, or file-naming violations. |
 
 ## `--run-tests`
 
@@ -161,6 +168,80 @@ Runs `npx nyc --reporter=json --reporter=text node --test` (with
 `npx c8 --reporter=json node --test` as a fallback) in the project root,
 generating `coverage/coverage-final.json`, before analyzing. On failure, the
 error is printed to stderr and the CLI exits 1.
+
+## Profile
+
+`crap4js profile [--name <pattern>] [--threshold <ms>] [--top <N>] [paths...]`
+runs the test suite against instrumented source and reports per-function
+timing. Defaults: `--top 20`, threshold off. `--name` is passed to
+`node --test --test-name-pattern`.
+
+How it works (port of crap4dart 0.4.0):
+
+1. A temporary copy of the project is created at
+   `<root>/.crap_profile_temp/` (inside the project root, so `node_modules`
+   resolution walks up to the real dependencies) with `package.json`, `src/`,
+   `test/`, and every analyzed source file instrumented in place.
+2. Instrumentation wraps every function body — located with the same
+   extraction rules as `analyze` — in `performance.now()` + `try/finally`,
+   calling `globalThis.__crap_record("<relFile>|<method>", start)`.
+3. A collector module is preloaded into every node process via
+   `NODE_OPTIONS --import`; it aggregates (calls, totalMicros, minMicros,
+   maxMicros) per method and merges into `CRAP_PROFILE_OUTPUT` with atomic
+   writes (temp file + rename), so parallel test processes aggregate safely.
+4. `node --test` runs in the temp copy; timings are attributed to the
+   analyzer's method inventory by `"<relFile>|<methodName>"` key — unmatched
+   entries are ignored. The temp directory is removed afterwards (kept when
+   `CRAP_PROFILE_DEBUG` is set).
+
+Console table, sorted by TOTAL descending, limited to top N:
+
+```
+Profile Report (N methods, total T.TTms)
+TOTAL(ms)      %  CALLS   MEAN(µs)   MAX(µs)  @60fps(ms) METHOD                         FILE:LINE
+--------------------------------------------------------------------------------------------------
+    18.23  20.8%     31      588.0      4200       35.28 walkForEntries                 src/complexity.js:164
+```
+
+- `%` — share of total profiled time; `@60fps(ms)` — mean × 60 (cost if the
+  function ran every frame at 60fps).
+- The full (untruncated) report is also written to
+  `profile-reports/profile-<timestamp>.txt` and `.json`.
+- Exit 2 when any method's total exceeds `--threshold` ms; exit 1 when the
+  run produced no timing data.
+
+Skipped from upstream: `--tags`/`--exclude-tags` (`node --test` has no tag
+concept — use `--name` patterns) and the config-file options (crap4js has no
+config system; all knobs are CLI flags).
+
+## File naming
+
+`crap4js file-naming [paths...]` (default: the normal source-selection rules)
+flags mechanical file names that indicate code split without a domain
+boundary:
+
+- Generic stems (lowercased exact match on the basename without extension):
+  `common`, `core`, `general`, `helper`, `helpers`, `misc`, `shared`,
+  `stuff`, `temp`, `tmp`, `types`, `util`, `utils`, `utilities`, `utility`,
+  `various` → `generic name "X.<ext>" — split by domain instead of
+  accumulating unrelated declarations`
+- Numeric suffix: `[a-z_][0-9]+$` on the lowercased stem → `numeric suffix in
+  "X.<ext>" — split by domain instead of numbered parts (batch1, part2, v2 ...)`
+- Allowed-stems whitelist (numeric suffix OK): the upstream crap4dart
+  `defaultAllowedStems` (`aes256`, `base64`, `crc32`, `sha256`, `utf8`, ...).
+
+Test files (`*.spec.*`, `*.test.*`, `__tests__/`) and test directories
+(`test/`, `tests/`) are always excluded.
+
+Output: one line per violation (relative path + message), then a summary —
+`N/M files with mechanical names` on violations, `M files have
+domain-meaningful names` otherwise. Exit 2 iff violations exist.
+
+## skill
+
+`crap4js skill` prints a JavaScript-adapted version of the crap4dart
+profiling skill (when to profile, how the instrumentation works, how to read
+the report) followed by one line on installing it as an agent skill. Exits 0.
 
 ## Non-Goals (v1)
 

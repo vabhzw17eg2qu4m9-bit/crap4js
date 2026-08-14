@@ -49,6 +49,9 @@ crap4js --help           Print this help and exit 0.
 crap4js --coverage <p>   Override coverage file (default: coverage/coverage-final.json).
 crap4js --threshold <n>  Override CRAP threshold (default: 8.0).
 crap4js --run-tests      Run the test+coverage suite before analyzing.
+crap4js profile [...]    Run instrumented tests and report per-function timing.
+crap4js file-naming [...]  Flag mechanical file names (generic/numeric stems).
+crap4js skill            Print the crap4js profiling skill for AI agents.
 ```
 
 `--changed` is mutually exclusive with explicit paths. Unknown flags are a
@@ -113,8 +116,43 @@ method is reported with `N/A` coverage and CRAP.
 
 Runs `npx nyc --reporter=json --reporter=text node --test` (falling back to
 `npx c8 --reporter=json node --test`) in the project root, generating the
-coverage file at its default path, before analyzing. On failure, the error is
-printed to stderr and the CLI exits 1.
+coverage file at its default path, before analyzing. On failure, the error
+is printed to stderr and the CLI exits 1.
+
+## `profile`
+
+`crap4js profile [--name <pattern>] [--threshold <ms>] [--top <N>] [paths...]`
+is a source-instrumentation profiler (ported from crap4dart 0.4.0): it makes
+an instrumented temp copy of the project with every function body wrapped in
+`performance.now()` + `try/finally`, runs `node --test` against it, and
+reports exact per-function timing:
+
+```
+Profile Report (12 methods, total 87.51ms)
+TOTAL(ms)      %  CALLS   MEAN(µs)   MAX(µs)  @60fps(ms) METHOD                         FILE:LINE
+--------------------------------------------------------------------------------------------------
+     18.23  20.8%     31      588.0      4200       35.28 walkForEntries                 src/complexity.js:164
+```
+
+Defaults: `--top 20`, threshold off. Full reports are written to
+`profile-reports/profile-<timestamp>.txt` and `.json`. Exit 2 when any
+function's total exceeds `--threshold` ms. `--name` is forwarded to
+`node --test --test-name-pattern`.
+
+## `file-naming`
+
+`crap4js file-naming [paths...]` flags mechanical file names — generic
+stems (`utils.js`, `helpers.ts`) and numeric suffixes (`batch1.js`,
+`report2.js`) — that indicate code split without a domain boundary. Stems
+where digits carry meaning (`base64`, `sha256`, `utf8`, ...) are allowed;
+test files/directories are excluded. One line per violation plus a summary;
+exit 2 iff violations exist.
+
+## `skill`
+
+`crap4js skill` prints a JavaScript-adapted profiling skill for AI agents
+(when to profile, how the instrumentation works, how to read the report)
+plus one line on installing it as an agent skill. Exits 0.
 
 ## Complexity rules
 
@@ -165,12 +203,20 @@ crap4js/
     report.js      tabular formatter
     files.js       source finder + git-changed + path expansion
     runtests.js    --run-tests helper
+    instrument.js  profile command source instrumentation
+    profile.js     profile command runner + report
+    fileNaming.js  file-naming command
+    skill.js       skill command text
   test/
     crapScore.test.js
     complexity.test.js
     coverage.test.js
     analyzer.test.js
     report.test.js
+    files.test.js
+    fileNaming.test.js
+    profile.test.js
+    skill.test.js
     cli.test.js
     fixtures/
       sample.js
