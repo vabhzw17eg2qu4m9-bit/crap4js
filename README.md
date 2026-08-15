@@ -58,6 +58,9 @@ crap4js unused-code [...]  Flag module-private declarations never referenced.
 crap4js unused-files [...]  Flag source files never imported.
 crap4js banned-imports [--from GLOB --forbid GLOB --message MSG]... [paths...]
                          Enforce architectural import boundaries.
+crap4js magic-constants [paths...]
+                         Flag hex colors outside constants and literals
+                         repeated 3+ times in one file.
 crap4js skill            Print the crap4js profiling skill for AI agents.
 ```
 
@@ -65,8 +68,8 @@ crap4js skill            Print the crap4js profiling skill for AI agents.
 usage error.
 
 The gate-check subcommands (`file-naming`, `nesting`, `class-size`,
-`weight-of-class`, `unused-code`, `unused-files`, `banned-imports`) are
-ports of crap4dart 0.5.x gates. crap4js has no gate framework or config
+`weight-of-class`, `unused-code`, `unused-files`, `banned-imports`,
+`magic-constants`) are ports of crap4dart gates. crap4js has no gate framework or config
 file, so each gate is a subcommand with its default thresholds and the
 shared exit-code contract: `0` pass/skip, `1` usage error, `2` violations.
 
@@ -228,6 +231,22 @@ rules the command prints `no rules configured` and exits 0; unbalanced or
 unknown flags are a usage error (exit 1). Globs: `*` matches within one
 path segment, `**` across segments, `?` one character.
 
+## `magic-constants`
+
+`crap4js magic-constants [paths...]` (port of crap4dart's
+magic_constants gate, 0.6.x) flags magic literals. Two checks per file:
+(a) hex color integer literals (`0xRRGGBB` / `0xAARRGGBB`, 6–8 hex
+digits) outside named constant declarations — every line spanned by a
+`const` initializer (call arguments inside it included) is exempt;
+(b) numeric (by raw lexeme) and string literals (value length ≥ 4)
+whose value repeats 3+ times in one file — every occurrence is
+reported as `literal <value> repeats N times — extract a named
+constant`. Template literals with interpolations are skipped; plain
+no-interpolation templates count as strings. Defaults are baked in
+(min_duplicates=3, min_length=4, hex rule on) — crap4js has no config.
+Any `--flag` argument is a usage error (exit 1). Exit 2 iff violations
+exist.
+
 ## `skill`
 
 `crap4js skill` prints a JavaScript-adapted profiling skill for AI agents
@@ -292,6 +311,7 @@ crap4js/
     unusedCode.js  unused-code command
     unusedFiles.js unused-files command
     bannedImports.js  banned-imports command
+    magicConstants.js  magic-constants command
     gateCommon.js  shared gate-subcommand runner
     imports.js     import-specifier collection + resolution
     skill.js       skill command text

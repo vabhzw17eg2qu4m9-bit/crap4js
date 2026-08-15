@@ -18,12 +18,15 @@
 //   crap4js unused-files [...]  Flag source files never imported.
 //   crap4js banned-imports [--from G --forbid G --message M]... [paths...]
 //                            Enforce architectural import boundaries.
+//   crap4js magic-constants [paths...]
+//                            Flag hex colors outside constants and literals
+//                            repeated 3+ times per file.
 //   crap4js skill            Print the crap4js profiling skill for AI agents.
 //
 // The first argument selects a subcommand when it is exactly `profile`,
 // `file-naming`, `nesting`, `class-size`, `weight-of-class`, `unused-code`,
-// `unused-files`, `banned-imports`, or `skill`; anything else is analyzed
-// as before.
+// `unused-files`, `banned-imports`, `magic-constants`, or `skill`;
+// anything else is analyzed as before.
 //
 // Exit codes: 0 success; 1 usage error; 2 CRAP/profile threshold exceeded
 // or gate-check violations.
@@ -40,6 +43,7 @@ import { runWeightOfClass } from './weightOfClass.js';
 import { runUnusedCode } from './unusedCode.js';
 import { runUnusedFiles } from './unusedFiles.js';
 import { runBannedImports } from './bannedImports.js';
+import { runMagicConstants } from './magicConstants.js';
 import { parseProfileArgs, runProfile } from './profile.js';
 import { runSkill } from './skill.js';
 
@@ -72,6 +76,9 @@ function usage() {
     '                           Flag source files never imported by analyzed sources',
     '  crap4js banned-imports [--from GLOB --forbid GLOB --message MSG]... [paths...]',
     '                           Enforce architectural import boundaries',
+    '  crap4js magic-constants [paths...]',
+    '                           Flag hex colors outside constants and literals',
+    '                           repeated 3+ times in one file',
     '  crap4js skill            Print the crap4js profiling skill for AI agents',
     '',
   ].join('\n');
@@ -88,6 +95,7 @@ const SUBCOMMANDS = {
   'unused-code': (args, ctx) => runUnusedCode(args, ctx),
   'unused-files': (args, ctx) => runUnusedFiles(args, ctx),
   'banned-imports': (args, ctx) => runBannedImports(args, ctx),
+  'magic-constants': (args, ctx) => runMagicConstants(args, ctx),
   skill: (_args, ctx) => runSkill(ctx),
 };
 
