@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.4.0...v0.5.0) (2026-08-15)
+
+
+### Features
+
+* port magic_constants check from crap4dart 0.6.0 as subcommand ([#16](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/16)) ([e5c61bc](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/e5c61bc454acb9b90afd4eca79a353dc4aedb05a))
+
 ## [0.4.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.3.0...v0.4.0) (2026-08-14)
 
 
