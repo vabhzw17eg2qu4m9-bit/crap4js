@@ -50,12 +50,15 @@ crap4js unused-files [paths...]
                          Flag source files never imported (paths → skip).
 crap4js banned-imports [--from GLOB --forbid GLOB --message MSG]... [paths...]
                          Enforce architectural import boundaries.
+crap4js magic-constants [paths...]
+                         Flag hex colors outside constants and literals
+                         repeated 3+ times in one file.
 crap4js skill            Print the crap4js profiling skill for AI agents.
 ```
 
 The first argument selects a subcommand when it is exactly `profile`,
 `file-naming`, `nesting`, `class-size`, `weight-of-class`, `unused-code`,
-`unused-files`, `banned-imports`, or `skill`; anything else (flags, paths)
+`unused-files`, `banned-imports`, `magic-constants`, or `skill`; anything else (flags, paths)
 is analyzed as the CRAP command above. `--changed` is mutually exclusive
 with explicit paths. Unknown flags are a usage error (exit 1).
 
@@ -173,7 +176,7 @@ threshold; otherwise `passed`.
 |------|-----------------------------------------------------------------------------|
 | `0`  | Success (including empty selection, or max numeric CRAP ≤ threshold).       |
 | `1`  | CLI usage error (bad flag, bad threshold, `--changed` + paths, unreadable, banned-imports rule misuse). |
-| `2`  | CRAP threshold exceeded (`CRAP threshold exceeded: <max> > <threshold>` on stderr), profile threshold exceeded, or gate-subcommand violations (file-naming, nesting, class-size, weight-of-class, unused-code, unused-files, banned-imports). |
+| `2`  | CRAP threshold exceeded (`CRAP threshold exceeded: <max> > <threshold>` on stderr), profile threshold exceeded, or gate-subcommand violations (file-naming, nesting, class-size, weight-of-class, unused-code, unused-files, banned-imports, magic-constants). |
 
 ## `--run-tests`
 
@@ -250,11 +253,12 @@ Output: one line per violation (relative path + message), then a summary —
 `N/M files with mechanical names` on violations, `M files have
 domain-meaningful names` otherwise. Exit 2 iff violations exist.
 
-## Gate subcommands (crap4dart 0.5.x ports)
+## Gate subcommands (crap4dart ports)
 
 `nesting`, `class-size`, `weight-of-class`, `unused-code`, `unused-files`,
 and `banned-imports` are ports of the crap4dart 0.5.x gates of the same
-names. crap4js has no gate framework and no config file, so each gate is
+names; `magic-constants` is a port of the crap4dart 0.6.x
+magic_constants gate. crap4js has no gate framework and no config file, so each gate is
 a CLI subcommand with its built-in default thresholds; every gate accepts
 `[paths...]` (default: the normal source-selection rules, test files and
 test directories always excluded). Shared output contract: one
@@ -323,6 +327,28 @@ relative imports, its resolved project-relative path — matches any
 (exit 1). With no rules the command prints `no rules configured` and
 passes. Globs: `*` matches within one path segment, `**` across
 segments, `?` one character.
+
+### magic-constants
+
+Port of the crap4dart 0.6.x magic_constants gate with the upstream
+defaults baked in (min_duplicates=3, min_length=4, hex rule on —
+crap4js has no config). Two checks per file: (a) integer literals with
+a raw lexeme matching `^0[xX][0-9a-fA-F]{6,8}$` (hex colors) that are
+not on a line belonging to a `const` initializer — every line spanned
+by the initializer is exempt, which covers call arguments inside it —
+are reported as `hex color outside a constant declaration`; (b) numeric
+(counted by raw lexeme) and string literals (value length ≥ 4) whose
+value appears 3+ times in one file — every occurrence is reported as
+`literal <value> repeats N times — extract a named constant`. JS
+adaptation: template literals with interpolations are skipped entirely;
+no-interpolation templates count as strings; JS has no adjacent-string
+concatenation, so no merged-value handling is needed. Takes only paths
+— any `--flag` argument is a usage error (exit 1).
+
+Upstream changes NOT ported (no crap4js equivalent): crap4dart 0.5.2's
+profile part-of fix (Dart-only), 0.6.0's baseline/severity/config knobs
+(no gate framework or config file in crap4js), 0.6.1's internal
+constants refactor (no behavior change).
 
 ## skill
 

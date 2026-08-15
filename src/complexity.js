@@ -109,13 +109,17 @@ export function parseSource(source, ext) {
 // node's children itself and the generic child traversal should be skipped.
 const SKIP = Symbol('skip');
 
+// Named constants for literals repeated across the module (magic_constants).
+const ANON = '<anonymous>';
+const IDENT = 'Identifier';
+
 // One handler per AST node type that yields a method entry or controls how
 // its children are traversed. Each handler is small (CC ≤ 4); walkForEntries
 // is just the dispatch.
 const HANDLERS = {
   FunctionDeclaration(node, className, methods) {
     if (!node.body) return;
-    methods.push(makeMethod(node.id?.name ?? '<anonymous>', node));
+    methods.push(makeMethod(node.id?.name ?? ANON, node));
   },
   // @babel/parser names class methods ClassMethod/ClassPrivateMethod (acorn
   // called them MethodDefinition). The method node itself carries body/params,
@@ -124,7 +128,7 @@ const HANDLERS = {
   ClassPrivateMethod: classMethodHandler,
   VariableDeclarator(node, className, methods) {
     if (!node.init?.body || !FUNCTION_LIKE.has(node.init.type)) return;
-    methods.push(makeMethod(node.id?.name ?? '<anonymous>', node.init));
+    methods.push(makeMethod(node.id?.name ?? ANON, node.init));
   },
   AssignmentExpression(node, className, methods) {
     if (!node.right?.body || !FUNCTION_LIKE.has(node.right.type)) return;
@@ -244,26 +248,26 @@ function isNamedFunctionDecl(n) {
 }
 
 function keyName(key) {
-  if (!key) return '<anonymous>';
-  if (key.type === 'Identifier') return key.name;
+  if (!key) return ANON;
+  if (key.type === IDENT) return key.name;
   // @babel/parser private-method key is PrivateName ({ id: { name } }).
   if (key.type === 'PrivateName') return '#' + key.id?.name;
   if (key.type === 'Literal') return String(key.value);
-  return '<anonymous>';
+  return ANON;
 }
 
 export function leftName(node) {
-  if (!node) return '<anonymous>';
-  if (node.type === 'Identifier') return node.name;
+  if (!node) return ANON;
+  if (node.type === IDENT) return node.name;
   if (node.type === 'MemberExpression') {
     const obj = leftName(node.object);
     const prop =
-      node.property.type === 'Identifier' && !node.computed
+      node.property.type === IDENT && !node.computed
         ? node.property.name
         : node.property.type === 'Literal'
         ? String(node.property.value)
         : '<anon>';
     return `${obj}.${prop}`;
   }
-  return '<anonymous>';
+  return ANON;
 }
