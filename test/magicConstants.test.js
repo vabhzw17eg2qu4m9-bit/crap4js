@@ -83,9 +83,10 @@ test('repeated numeric literal repeated 3+ times flags every occurrence', () => 
 
 test('repeated string literal repeated 3+ times flags every occurrence', () => {
   const src = [
-    "export const A = 'hello';",
-    "export const B = 'hello';",
-    "export const C = 'hello';",
+    "log('hello');",
+    "log('hello');",
+    "log('hello');",
+    'function log(m) { return m; }',
   ].join('\n');
   const v = violationsOf(src);
   assert.equal(v.length, 3);
@@ -100,6 +101,69 @@ test('strings shorter than 4 characters are ignored', () => {
 test('two occurrences of a literal are not flagged', () => {
   const v = violationsOf('f(1234); g(1234);\n');
   assert.equal(v.length, 0);
+});
+
+test('string literals as object keys are not flagged (0.7.2)', () => {
+  const src = [
+    'const a = build({ "theme-dark": 1 });',
+    'const b = build({ "theme-dark": 2 });',
+    'const c = build({ "theme-dark": 3 });',
+    'export const all = [a, b, c];',
+  ].join('\n');
+  assert.deepEqual(violationsOf(src), []);
+});
+
+test('string literals in computed index expressions are not flagged (0.8.3)', () => {
+  const src = [
+    'function one(x) { return x["user-name"]; }',
+    'function two(x) { return x?.["user-name"]; }',
+    'function three(x) { return x["user-name"]; }',
+    'export const pickers = [one, two, three];',
+  ].join('\n');
+  assert.deepEqual(violationsOf(src), []);
+});
+
+test('string literals as switch case labels are not flagged (0.8.5)', () => {
+  const src = [
+    "function a(m) { switch (m) { case 'night-mode': return 1; } }",
+    "function b(m) { switch (m) { case 'night-mode': return 2; } }",
+    "function c(m) { switch (m) { case 'night-mode': return 3; } }",
+    'export const modes = [a, b, c];',
+  ].join('\n');
+  assert.deepEqual(violationsOf(src), []);
+});
+
+test('const declaration lines are exempt from the duplicates rule too (0.8.4)', () => {
+  const src = [
+    'const A = 86400;',
+    'const B = 86400;',
+    'const C = 86400;',
+    'export const sum = A + B + C;',
+  ].join('\n');
+  assert.deepEqual(violationsOf(src), []);
+});
+
+test('const initializer exemption covers the full nested subtree', () => {
+  const src = [
+    'const THEME = wrap({',
+    '  primary: 0x1a2b3c,',
+    '  accent: shade(0x4d5e6f, mix(0x778899)),',
+    '});',
+    'export const theme = THEME;',
+  ].join('\n');
+  assert.deepEqual(violationsOf(src), []);
+});
+
+test('numeric literals in index expressions are still counted', () => {
+  const src = [
+    'function f(a, b, c) {',
+    '  return [a[86400], b[86400], c[86400]];',
+    '}',
+    'export const g = f;',
+  ].join('\n');
+  const v = violationsOf(src);
+  assert.equal(v.length, 3);
+  assert.match(v[0].message, /literal 86400 repeats 3 times/);
 });
 
 test('clean file exits 0 with the passing summary', () => {

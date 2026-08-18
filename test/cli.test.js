@@ -54,6 +54,8 @@ test('--help prints usage and exits 0', () => {
   assert.equal(r.status, 0);
   assert.match(r.stdout, /Usage:/);
   assert.match(r.stdout, /--changed/);
+  assert.match(r.stdout, /test-assertions/);
+  assert.match(r.stdout, /folder-structure/);
 });
 
 test('unknown flag exits 1', () => {

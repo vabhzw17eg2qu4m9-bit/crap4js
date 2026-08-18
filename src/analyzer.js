@@ -46,7 +46,10 @@ export function analyze({ filePaths, coveragePath, projectRoot }) {
 function loadCoverageMap(coveragePath, projectRoot, warn) {
   if (!coveragePath) return null;
   if (!existsSync(coveragePath)) {
-    warn(`coverage file not found at ${coveragePath}. Coverage will be N/A.`);
+    warn(
+      `coverage file not found at ${coveragePath}. Coverage will be N/A. ` +
+        'Generate it with `npx c8 --reporter=json node --test`.',
+    );
     return null;
   }
   try {

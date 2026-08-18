@@ -21,11 +21,15 @@
 //   crap4js magic-constants [paths...]
 //                            Flag hex colors outside constants and literals
 //                            repeated 3+ times per file.
+//   crap4js test-assertions [paths...]
+//                            Flag test() bodies with zero assertion calls.
+//   crap4js folder-structure Flag src/ dirs with loose (direct) files.
 //   crap4js skill            Print the crap4js profiling skill for AI agents.
 //
 // The first argument selects a subcommand when it is exactly `profile`,
 // `file-naming`, `nesting`, `class-size`, `weight-of-class`, `unused-code`,
-// `unused-files`, `banned-imports`, `magic-constants`, or `skill`;
+// `unused-files`, `banned-imports`, `magic-constants`,
+// `test-assertions`, `folder-structure`, or `skill`;
 // anything else is analyzed as before.
 //
 // Exit codes: 0 success; 1 usage error; 2 CRAP/profile threshold exceeded
@@ -44,6 +48,8 @@ import { runUnusedCode } from './unusedCode.js';
 import { runUnusedFiles } from './unusedFiles.js';
 import { runBannedImports } from './bannedImports.js';
 import { runMagicConstants } from './magicConstants.js';
+import { runTestAssertions } from './testAssertions.js';
+import { runFolderStructure } from './folderStructure.js';
 import { parseProfileArgs, runProfile } from './profile.js';
 import { runSkill } from './skill.js';
 
@@ -79,6 +85,10 @@ function usage() {
     '  crap4js magic-constants [paths...]',
     '                           Flag hex colors outside constants and literals',
     '                           repeated 3+ times in one file',
+    '  crap4js test-assertions [paths...]',
+    '                           Flag test()/it() bodies with zero assertion calls',
+    '  crap4js folder-structure',
+    '                           Flag src/ directories with loose direct files',
     '  crap4js skill            Print the crap4js profiling skill for AI agents',
     '',
   ].join('\n');
@@ -96,6 +106,8 @@ const SUBCOMMANDS = {
   'unused-files': (args, ctx) => runUnusedFiles(args, ctx),
   'banned-imports': (args, ctx) => runBannedImports(args, ctx),
   'magic-constants': (args, ctx) => runMagicConstants(args, ctx),
+  'test-assertions': (args, ctx) => runTestAssertions(args, ctx),
+  'folder-structure': (args, ctx) => runFolderStructure(args, ctx),
   skill: (_args, ctx) => runSkill(ctx),
 };
 

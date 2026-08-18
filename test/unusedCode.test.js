@@ -56,8 +56,29 @@ test('never-referenced module-private declarations are flagged', () => {
   }
 });
 
-test('exported declarations are module-public and never flagged', () => {
+test('declaring a private name does not strip its references (0.7.1 regression)', () => {
   const root = fixture({
+    // The reference sits inside a class body and textually precedes the
+    // declaration — upstream 0.7.1 fixed declaring-side reference removal
+    // flagging exactly this cross-class, same-module access as unused.
+    'registry.js': [
+      'class Registry {',
+      '  register() { return helper(); }',
+      '}',
+      'function helper() { return 1; }',
+      'export default Registry;',
+    ].join('\n'),
+  });
+  try {
+    const { violations, checked } = unusedCodeViolations(gateFiles([], root), root);
+    assert.equal(checked, 2);
+    assert.deepEqual(violations, []);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('exported declarations are module-public and never flagged', () => {  const root = fixture({
     'api.js': [
       'const internal = 1;',
       'export const visible = internal;',

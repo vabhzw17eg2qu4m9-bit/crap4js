@@ -120,6 +120,18 @@ test('formatProfileReport top=0 shows all rows', () => {
   assert.match(out, /f\.js:2/);
 });
 
+test('formatProfileReport marks sub-30µs means with ~ (0.9.2)', () => {
+  const profiles = [
+    // mean 300µs — trustworthy; mean 12µs — instrumentation noise.
+    { method: 'real', file: 'f.js', line: 1, calls: 10, totalMicros: 3000, minMicros: 100, maxMicros: 500 },
+    { method: 'noise', file: 'f.js', line: 2, calls: 10, totalMicros: 120, minMicros: 5, maxMicros: 30 },
+  ];
+  const out = formatProfileReport(profiles, { top: 0 });
+  assert.match(out, /\s300\.0\s/);
+  assert.doesNotMatch(out, /~300\.0/);
+  assert.match(out, /~12\.0/);
+});
+
 test('parseProfileArgs rejects unknown flags and bad values', () => {
   assert.throws(() => parseProfileArgs(['--bogus']), /Unknown flag/);
   assert.throws(() => parseProfileArgs(['--top']), /requires a value/);
@@ -173,6 +185,45 @@ test('profile end-to-end: instrumented run reports methods and writes reports', 
     const over = runCli(root, ['profile', '--threshold', '0']);
     assert.equal(over.status, 2);
     assert.match(over.stderr, /Profile threshold exceeded/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('profile positional path selects the test to run from the instrumented copy (0.9.2)', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'crap4js-profile-path-'));
+  try {
+    mkdirSync(path.join(root, 'src'));
+    mkdirSync(path.join(root, 'test'));
+    writeFileSync(path.join(root, 'package.json'), '{"type":"module"}');
+    writeFileSync(
+      path.join(root, 'src', 'add.js'),
+      'export function add(a, b) {\n  return a + b;\n}\n',
+    );
+    writeFileSync(
+      path.join(root, 'src', 'mul.js'),
+      'export function mul(a, b) {\n  return a * b;\n}\n',
+    );
+    writeFileSync(
+      path.join(root, 'test', 'add.test.js'),
+      [
+        "import test from 'node:test';",
+        "import assert from 'node:assert';",
+        "import { add } from '../src/add.js';",
+        "import { mul } from '../src/mul.js';",
+        "test('add works', () => assert.equal(add(1, mul(2, 2)), 5));",
+        '',
+      ].join('\n'),
+    );
+    // Only ONE of the two test files is selected; the FULL src/ set is
+    // still instrumented and attributed — and the run executes the temp
+    // copy, not the original files.
+    const r = runCli(root, ['profile', 'test/add.test.js']);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /Profile Report \(2 methods/);
+    assert.match(r.stdout, /add\s+src\/add\.js:1/);
+    assert.match(r.stdout, /mul\s+src\/mul\.js:1/);
+    assert.ok(!existsSync(path.join(root, '.crap_profile_temp')));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

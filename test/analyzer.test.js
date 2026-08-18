@@ -52,14 +52,23 @@ test('analyze returns MethodMetric with all expected fields', () => {
 
 test('missing coverage file -> null coverage + null CRAP, with stderr warning', () => {
   const { root } = setupProject();
-  const { metrics } = analyze({
-    filePaths: [path.join(root, 'src', 'sample.js')],
-    coveragePath: path.join(root, 'coverage', 'does-not-exist.json'),
-    projectRoot: root,
-  });
-  assert.equal(metrics.length, 1);
-  assert.equal(metrics[0].coverage, null);
-  assert.equal(metrics[0].crapScore, null);
+  const warnings = [];
+  const originalWrite = process.stderr.write;
+  process.stderr.write = (s) => warnings.push(String(s));
+  try {
+    const { metrics } = analyze({
+      filePaths: [path.join(root, 'src', 'sample.js')],
+      coveragePath: path.join(root, 'coverage', 'does-not-exist.json'),
+      projectRoot: root,
+    });
+    assert.equal(metrics.length, 1);
+    assert.equal(metrics[0].coverage, null);
+    assert.equal(metrics[0].crapScore, null);
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+  // The warning names the port's own coverage generation command (0.8.7).
+  assert.match(warnings.join(''), /npx c8 --reporter=json node --test/);
 });
 
 test('coverage path null -> null coverage + null CRAP', () => {

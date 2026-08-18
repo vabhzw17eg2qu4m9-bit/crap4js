@@ -6,6 +6,10 @@
 // (see instrument.js), runs `node --test` with a collector preloaded via
 // NODE_OPTIONS, then attributes the recorded timings to the analyzer's
 // method inventory and renders the report table.
+//
+// The FULL src/ set is always instrumented and attributed — positional
+// arguments only select which tests run, remapped into the temp copy
+// (running the original test files would record no timings).
 
 import { spawnSync } from 'node:child_process';
 import {
@@ -19,7 +23,7 @@ import {
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { analyze } from './analyzer.js';
-import { expandPaths, findSourceFiles } from './files.js';
+import { findSourceFiles } from './files.js';
 import { instrumentSource } from './instrument.js';
 import { padLeft, padRight } from './report.js';
 
@@ -46,7 +50,7 @@ globalThis.__crap_record = (key, startMs) => {
   if (micros < s.minMicros) s.minMicros = micros;
   if (micros > s.maxMicros) s.maxMicros = micros;
   stats.set(key, s);
-  if (++calls % 25 === 0) flush(); // periodic flush guards against crashes
+  if (++calls % 5 === 0) flush(); // flush every 5 records (0.9.2)
 };
 
 process.on('exit', flush);
@@ -66,11 +70,17 @@ function flush() {
 }
 
 function readMerged(out) {
-  try {
-    return existsSync(out) ? JSON.parse(readFileSync(out, 'utf8')) : {};
-  } catch {
-    return {}; // corrupt or half-written file — start fresh
+  // Retries once: a concurrent rename can land between existsSync and
+  // readFileSync (0.9.2). The temp name carries the pid, so parallel
+  // workers never flush through the same temp file.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return existsSync(out) ? JSON.parse(readFileSync(out, 'utf8')) : {};
+    } catch {
+      // fall through and retry
+    }
   }
+  return {}; // corrupt or lost mid-rename file — start fresh
 }
 
 function mergeEntry(merged, key, s) {
@@ -90,8 +100,10 @@ function mergeEntry(merged, key, s) {
  * Parse `profile` subcommand arguments.
  *
  * Flags: `--name <pattern>` (test-name pattern), `--threshold <ms>`
- * (default off), `--top <N>` (default 20). Everything else is a test/source
- * path. Throws on unknown flags and invalid values.
+ * (default off), `--top <N>` (default 20). Everything else is a test
+ * path — passed to `node --test` remapped into the instrumented copy,
+ * never used to shrink the instrumentation set. Throws on unknown flags
+ * and invalid values.
  */
 export function parseProfileArgs(argv) {
   const raw = { paths: [], name: undefined, threshold: undefined, top: undefined };
@@ -112,7 +124,7 @@ export function parseProfileArgs(argv) {
  * method's total exceeds the threshold.
  */
 export function runProfile(opts, ctx) {
-  const files = profileFiles(opts.paths, ctx.cwd);
+  const files = findSourceFiles(ctx.cwd);
   if (files.length === 0) {
     ctx.out.write('No JavaScript files to profile.\n');
     return 0;
@@ -125,10 +137,6 @@ export function runProfile(opts, ctx) {
   return profileVerdict(profiles, opts.thresholdMs, ctx);
 }
 
-function profileFiles(paths, projectRoot) {
-  return paths.length > 0 ? expandPaths(paths, projectRoot) : findSourceFiles(projectRoot);
-}
-
 // Runs `node --test` against the instrumented copy; returns the timings
 // object (key → stats), or null when no data was produced.
 function runInstrumentedTests(files, opts, ctx) {
@@ -136,7 +144,7 @@ function runInstrumentedTests(files, opts, ctx) {
   prepareTempCopy(files, tempDir, ctx.cwd);
   const outputFile = path.join(tempDir, '.crap_profile.json');
   ctx.err.write('Running instrumented tests...\n');
-  const result = spawnSync(process.execPath, testArgs(opts), {
+  const result = spawnSync(process.execPath, testArgs(opts, ctx.cwd, tempDir), {
     cwd: tempDir,
     env: testEnv(tempDir, outputFile),
   });
@@ -147,10 +155,21 @@ function runInstrumentedTests(files, opts, ctx) {
   return timings;
 }
 
-function testArgs(opts) {
-  return opts.name
+// `node --test` args; explicit paths are remapped from the original
+// project into the temp copy — otherwise the runner would execute the
+// ORIGINAL, non-instrumented test files and record no timings (0.9.2).
+function testArgs(opts, root, tempDir) {
+  const args = opts.name
     ? ['--test', '--test-name-pattern', opts.name]
     : ['--test'];
+  return [...args, ...opts.paths.map((p) => remapPath(p, root, tempDir))];
+}
+
+// A path made relative to the temp copy: absolute or relative paths inside
+// the project root become temp-copy paths; paths outside stay unchanged.
+function remapPath(p, root, tempDir) {
+  const rel = path.relative(root, path.resolve(root, p));
+  return rel.startsWith('..') ? p : path.join(tempDir, rel);
 }
 
 function testEnv(tempDir, outputFile) {
@@ -305,6 +324,10 @@ function tableHeader() {
   );
 }
 
+// Means below this are dominated by the instrumentation wrapper itself
+// (~1µs per call) — marked `~` so readers trust CALLS/TOTAL instead (0.9.2).
+const MEAN_NOISE_MICROS = 30;
+
 function profileRow(p, total) {
   const mean = p.calls > 0 ? p.totalMicros / p.calls : 0;
   const pct = total > 0 ? (p.totalMicros / total) * 100 : 0;
@@ -315,7 +338,7 @@ function profileRow(p, total) {
     ' ' +
     padLeft(String(p.calls), 6) +
     ' ' +
-    padLeft(mean.toFixed(1), 10) +
+    padLeft(meanWithCaveat(mean), 10) +
     ' ' +
     padLeft(String(p.maxMicros), 9) +
     ' ' +
@@ -325,6 +348,10 @@ function profileRow(p, total) {
     ' ' +
     `${p.file}:${p.line}`
   );
+}
+
+function meanWithCaveat(mean) {
+  return (mean < MEAN_NOISE_MICROS ? '~' : '') + mean.toFixed(1);
 }
 
 function thresholdLine(profiles, thresholdMs) {
