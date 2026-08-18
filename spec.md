@@ -53,12 +53,17 @@ crap4js banned-imports [--from GLOB --forbid GLOB --message MSG]... [paths...]
 crap4js magic-constants [paths...]
                          Flag hex colors outside constants and literals
                          repeated 3+ times in one file.
+crap4js test-assertions [paths...]
+                         Flag test()/it() bodies with zero assertion calls.
+crap4js folder-structure
+                         Flag src/ directories with loose direct files.
 crap4js skill            Print the crap4js profiling skill for AI agents.
 ```
 
 The first argument selects a subcommand when it is exactly `profile`,
 `file-naming`, `nesting`, `class-size`, `weight-of-class`, `unused-code`,
-`unused-files`, `banned-imports`, `magic-constants`, or `skill`; anything else (flags, paths)
+`unused-files`, `banned-imports`, `magic-constants`, `test-assertions`,
+`folder-structure`, or `skill`; anything else (flags, paths)
 is analyzed as the CRAP command above. `--changed` is mutually exclusive
 with explicit paths. Unknown flags are a usage error (exit 1).
 
@@ -88,8 +93,10 @@ coverage and CRAP are `null` (`N/A`).
 Absolute file-path keys are relativised against the project root. Entries
 outside the project root (e.g. dependency paths) are ignored.
 
-If the coverage file does not exist → a warning is printed to stderr and
-every method is reported with `N/A` coverage and CRAP.
+If the coverage file does not exist → a warning is printed to stderr,
+including the port's own generation command (`npx c8 --reporter=json
+node --test`, crap4dart 0.8.7 hint), and every method is reported with
+`N/A` coverage and CRAP.
 
 ## JavaScript parsing
 
@@ -176,7 +183,7 @@ threshold; otherwise `passed`.
 |------|-----------------------------------------------------------------------------|
 | `0`  | Success (including empty selection, or max numeric CRAP ≤ threshold).       |
 | `1`  | CLI usage error (bad flag, bad threshold, `--changed` + paths, unreadable, banned-imports rule misuse). |
-| `2`  | CRAP threshold exceeded (`CRAP threshold exceeded: <max> > <threshold>` on stderr), profile threshold exceeded, or gate-subcommand violations (file-naming, nesting, class-size, weight-of-class, unused-code, unused-files, banned-imports, magic-constants). |
+| `2`  | CRAP threshold exceeded (`CRAP threshold exceeded: <max> > <threshold>` on stderr), profile threshold exceeded, or gate-subcommand violations (file-naming, nesting, class-size, weight-of-class, unused-code, unused-files, banned-imports, magic-constants, test-assertions, folder-structure). |
 
 ## `--run-tests`
 
@@ -190,9 +197,14 @@ error is printed to stderr and the CLI exits 1.
 `crap4js profile [--name <pattern>] [--threshold <ms>] [--top <N>] [paths...]`
 runs the test suite against instrumented source and reports per-function
 timing. Defaults: `--top 20`, threshold off. `--name` is passed to
-`node --test --test-name-pattern`.
+`node --test --test-name-pattern`. Positional paths select which tests run:
+they are remapped from the project root into the instrumented temp copy and
+appended to `node --test` (paths outside the root pass through unchanged) —
+running the original, non-instrumented test files would record no timings
+(crap4dart 0.9.2 fix). The FULL `src/` set is always instrumented and
+attributed, so a narrow test selection never shrinks the report.
 
-How it works (port of crap4dart 0.4.0):
+How it works (port of crap4dart 0.4.0 / 0.9.x fixes):
 
 1. A temporary copy of the project is created at
    `<root>/.crap_profile_temp/` (inside the project root, so `node_modules`
@@ -203,8 +215,10 @@ How it works (port of crap4dart 0.4.0):
    calling `globalThis.__crap_record("<relFile>|<method>", start)`.
 3. A collector module is preloaded into every node process via
    `NODE_OPTIONS --import`; it aggregates (calls, totalMicros, minMicros,
-   maxMicros) per method and merges into `CRAP_PROFILE_OUTPUT` with atomic
-   writes (temp file + rename), so parallel test processes aggregate safely.
+   maxMicros) per method, flushes every 5 records, and merges into
+   `CRAP_PROFILE_OUTPUT` with atomic writes (per-pid temp file + rename),
+   so parallel test processes aggregate safely; the merge read retries
+   once around a concurrent rename (0.9.2).
 4. `node --test` runs in the temp copy; timings are attributed to the
    analyzer's method inventory by `"<relFile>|<methodName>"` key — unmatched
    entries are ignored. The temp directory is removed afterwards (kept when
@@ -221,6 +235,9 @@ TOTAL(ms)      %  CALLS   MEAN(µs)   MAX(µs)  @60fps(ms) METHOD               
 
 - `%` — share of total profiled time; `@60fps(ms)` — mean × 60 (cost if the
   function ran every frame at 60fps).
+- MEAN values marked `~` are sub-30µs — the instrumentation wrapper costs
+  on the order of a microsecond, so those means are mostly profiler noise;
+  read the CALLS/TOTAL deltas for such methods instead (0.9.2).
 - The full (untruncated) report is also written to
   `profile-reports/profile-<timestamp>.txt` and `.json`.
 - Exit 2 when any method's total exceeds `--threshold` ms; exit 1 when the
@@ -257,13 +274,16 @@ domain-meaningful names` otherwise. Exit 2 iff violations exist.
 
 `nesting`, `class-size`, `weight-of-class`, `unused-code`, `unused-files`,
 and `banned-imports` are ports of the crap4dart 0.5.x gates of the same
-names; `magic-constants` is a port of the crap4dart 0.6.x
-magic_constants gate. crap4js has no gate framework and no config file, so each gate is
+names; `magic-constants` is a port of the crap4dart 0.6.x–0.9.x
+magic_constants gate; `test-assertions` and `folder-structure` are ports
+of the crap4dart 0.9.x test_assertions and folder_structure gates.
+crap4js has no gate framework and no config file, so each gate is
 a CLI subcommand with its built-in default thresholds; every gate accepts
 `[paths...]` (default: the normal source-selection rules, test files and
-test directories always excluded). Shared output contract: one
-`file[:line]: message` line per violation, then a one-line summary; exit
-codes `0` pass, `1` usage error, `2` violations.
+test directories always excluded — except `test-assertions`, which checks
+test files, and `folder-structure`, which takes no arguments). Shared
+output contract: one `file[:line]: message` line per violation, then a
+one-line summary; exit codes `0` pass, `1` usage error, `2` violations.
 
 Upstream 0.5.0 gate-framework features that have no crap4js equivalent
 and are intentionally NOT ported: `severity`/`ignorable`
@@ -330,17 +350,24 @@ segments, `?` one character.
 
 ### magic-constants
 
-Port of the crap4dart 0.6.x magic_constants gate with the upstream
+Port of the crap4dart 0.6.x–0.9.x magic_constants gate with the upstream
 defaults baked in (min_duplicates=3, min_length=4, hex rule on —
 crap4js has no config). Two checks per file: (a) integer literals with
 a raw lexeme matching `^0[xX][0-9a-fA-F]{6,8}$` (hex colors) that are
 not on a line belonging to a `const` initializer — every line spanned
-by the initializer is exempt, which covers call arguments inside it —
-are reported as `hex color outside a constant declaration`; (b) numeric
-(counted by raw lexeme) and string literals (value length ≥ 4) whose
-value appears 3+ times in one file — every occurrence is reported as
-`literal <value> repeats N times — extract a named constant`. JS
-adaptation: template literals with interpolations are skipped entirely;
+by the initializer is exempt (the full nested subtree: call arguments,
+object elements, nested calls, 0.8.4/8071206) — are reported as
+`hex color outside a constant declaration`; (b) numeric (counted by raw
+lexeme) and string literals (value length ≥ 4) whose value appears 3+
+times in one file — every occurrence is reported as `literal <value>
+repeats N times — extract a named constant`. Lines inside a `const`
+initializer are exempt from the duplicates check as well (0.8.4).
+String literals in identifier positions are never counted (0.7.2
+map keys, 0.8.3 index expressions, 0.8.5 switch case labels): an
+object/dict property key, a computed member index (`obj['name']`,
+including optional chains), or a `switch` case label names a protocol
+value (JSON field, channel, enum), not a magic constant. JS adaptation:
+template literals with interpolations are skipped entirely;
 no-interpolation templates count as strings; JS has no adjacent-string
 concatenation, so no merged-value handling is needed. Takes only paths
 — any `--flag` argument is a usage error (exit 1).
@@ -349,6 +376,67 @@ Upstream changes NOT ported (no crap4js equivalent): crap4dart 0.5.2's
 profile part-of fix (Dart-only), 0.6.0's baseline/severity/config knobs
 (no gate framework or config file in crap4js), 0.6.1's internal
 constants refactor (no behavior change).
+
+Upstream 0.7.1 fixes already satisfied by the JS port (verified with
+regression tests): unused-code never stripped declared names from the
+reference set — the port counts identifier occurrences per module instead
+of removing names from a shared reference set, so cross-class same-module
+private access was never affected; unused-files already collected
+`export ... from` re-exports as import edges. The 0.8.6 banned-imports
+glob-regex caching (compile per pattern, not per file) is likewise
+already the port's shape — rules are compiled once per run before the
+file loop. The 0.8.7 stable N/A-row ordering (tie-break by file:line)
+was already the port's sort contract.
+
+### test-assertions
+
+Port of the crap4dart 0.9.x test_assertions gate with min_assertions=1
+baked in, mapped to node:test: flags `test()`/`it()` bodies containing
+fewer than one assertion call — a test without assertions compiles, runs
+green, and verifies nothing. Violation: `'<label>' has 0 assertion(s) —
+a test without assertions verifies nothing` at the registration's line.
+Counted assertion calls (lexically anywhere inside the body subtree,
+closures included):
+
+- calls through bindings imported from `node:assert`, `assert`,
+  `node:assert/strict`, or `assert/strict` — default (`assert(x)`),
+  namespace (`assert.equal(...)`), and destructured/renamed named
+  imports (`ok(x)`); every export of the assert module is an assertion;
+- `t.assert.*` member calls on the test-context parameter (the body
+  function's first parameter).
+
+`test.skip`/`it.only` registration forms are checked; body-less forms
+(`test.todo('x')`) are skipped; tests nested in `describe()` callbacks
+are checked individually. Default file set: `<root>/test/` recursively
+plus colocated `*.test.js`/`*.spec.js` under `src/`; explicit paths are
+kept verbatim. Summary: `M tests assert their expectations` /
+`N/M tests without assertions`. Takes only paths — any `--flag`
+argument is a usage error (exit 1).
+
+### folder-structure
+
+Port of the crap4dart 0.9.x folder_structure gate with max_loose_files=0
+and the default dir baked in (`src`, the port's source root): flags
+directories containing more than zero source files DIRECTLY —
+`N loose files directly in src — group them into feature packages
+(max 0)`. Only direct children count (non-recursive; every source
+extension, test colocates included); files in subdirectories are the
+organized form; a missing `src/` checks nothing and passes. Summary:
+`M directories organized into packages` / `N directory(ies) with
+loose-file sprawl`. Takes no arguments — any argument is a usage error
+(exit 1).
+
+### not ported from 0.7–0.9 (no crap4js equivalent)
+
+- `broken_goldens` gate + tofu detector + `goldens-guard` command —
+  Flutter PNG golden rendering has no JavaScript equivalent.
+- external Checkstyle-XML gate — requires the gate-framework config
+  system; crap4js has neither.
+- run_tests-by-default (0.9.x upstream behavior change) — breaking for a
+  CLI tool; crap4js keeps `--run-tests` opt-in (the pre-commit hook runs
+  the bare analyze on staged files, where a full test suite per commit
+  is unacceptable).
+- pixel-detector tuning commits — same Flutter-goldens-only area.
 
 ## skill
 

@@ -105,6 +105,21 @@ test('directory imports resolve through index.js', () => {
   }
 });
 
+test('re-exports count toward the import graph (0.7.1)', () => {
+  const root = fixture({
+    'index.js': "export { b } from './b';\n",
+    'b.js': 'export const b = 1;\n',
+  });
+  try {
+    const { violations } = unusedFilesViolations(gateFiles([], root), root);
+    // b is reached through index.js's `export ... from` — only the entry
+    // file itself is unimported.
+    assert.deepEqual(violations.map((v) => v.file), ['src/index.js']);
+  } finally {
+    cleanup(root);
+  }
+});
+
 test('resolveImport resolves relative specifiers to project-relative paths', () => {
   const root = fixture({
     'main.js': "import './b.js';\n",

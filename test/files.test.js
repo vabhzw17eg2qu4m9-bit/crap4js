@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 
-import { changedFiles, isChangeStatus, parseStatusLine, isTestFile } from '../src/files.js';
+import { changedFiles, isChangeStatus, parseStatusLine, isTestFile, testFiles } from '../src/files.js';
 
 // ---------- isChangeStatus ----------
 
@@ -189,5 +189,41 @@ test('isTestFile: false for production source', () => {
     'src/test.js',
   ]) {
     assert.equal(isTestFile(p), false, `expected ${p} to NOT be a test file`);
+  }
+});
+
+// ---------- testFiles ----------
+
+test('testFiles default: <root>/test/ walk plus colocated tests under src/', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'crap4js-testfiles-'));
+  try {
+    fs.mkdirSync(path.join(root, 'test', 'unit'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'src'));
+    fs.writeFileSync(path.join(root, 'test', 'a.test.js'), '');
+    fs.writeFileSync(path.join(root, 'test', 'unit', 'b.test.js'), '');
+    fs.writeFileSync(path.join(root, 'test', 'helper.js'), '');
+    fs.writeFileSync(path.join(root, 'src', 'app.js'), '');
+    fs.writeFileSync(path.join(root, 'src', 'colocated.test.js'), '');
+    const rel = testFiles([], root).map((f) => path.relative(root, f));
+    assert.deepEqual(rel, [
+      'src/colocated.test.js',
+      'test/a.test.js',
+      'test/helper.js',
+      'test/unit/b.test.js',
+    ]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('testFiles explicit path keeps test files verbatim', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'crap4js-testfiles-'));
+  try {
+    fs.mkdirSync(path.join(root, 'test'));
+    fs.writeFileSync(path.join(root, 'test', 'a.test.js'), '');
+    const rel = testFiles(['test/a.test.js'], root).map((f) => path.relative(root, f));
+    assert.deepEqual(rel, ['test/a.test.js']);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });

@@ -61,6 +61,9 @@ crap4js banned-imports [--from GLOB --forbid GLOB --message MSG]... [paths...]
 crap4js magic-constants [paths...]
                          Flag hex colors outside constants and literals
                          repeated 3+ times in one file.
+crap4js test-assertions [paths...]
+                         Flag test()/it() bodies with zero assertion calls.
+crap4js folder-structure Flag src/ directories with loose direct files.
 crap4js skill            Print the crap4js profiling skill for AI agents.
 ```
 
@@ -69,7 +72,8 @@ usage error.
 
 The gate-check subcommands (`file-naming`, `nesting`, `class-size`,
 `weight-of-class`, `unused-code`, `unused-files`, `banned-imports`,
-`magic-constants`) are ports of crap4dart gates. crap4js has no gate framework or config
+`magic-constants`, `test-assertions`, `folder-structure`) are ports of
+crap4dart gates. crap4js has no gate framework or config
 file, so each gate is a subcommand with its default thresholds and the
 shared exit-code contract: `0` pass/skip, `1` usage error, `2` violations.
 
@@ -125,7 +129,8 @@ the method's coverage and CRAP are `N/A`. Absolute file-path keys are
 relativised against the project root; entries outside the project root are
 ignored.
 
-If the coverage file is missing, a warning is printed to stderr and every
+If the coverage file is missing, a warning is printed to stderr (including
+the command to generate it — `npx c8 --reporter=json node --test`) and every
 method is reported with `N/A` coverage and CRAP.
 
 ## `--run-tests`
@@ -153,7 +158,12 @@ TOTAL(ms)      %  CALLS   MEAN(µs)   MAX(µs)  @60fps(ms) METHOD               
 Defaults: `--top 20`, threshold off. Full reports are written to
 `profile-reports/profile-<timestamp>.txt` and `.json`. Exit 2 when any
 function's total exceeds `--threshold` ms. `--name` is forwarded to
-`node --test --test-name-pattern`.
+`node --test --test-name-pattern`. Positional paths select which tests run
+(`node --test <paths...>`) and are remapped into the instrumented temp copy
+— pointing them at the original project would run non-instrumented tests
+and record no timings. The full `src/` set is always instrumented and
+attributed. MEAN values marked `~` are sub-30µs — instrumentation overhead
+dominates there; read the CALLS/TOTAL deltas instead.
 
 ## `file-naming`
 
@@ -234,18 +244,53 @@ path segment, `**` across segments, `?` one character.
 ## `magic-constants`
 
 `crap4js magic-constants [paths...]` (port of crap4dart's
-magic_constants gate, 0.6.x) flags magic literals. Two checks per file:
-(a) hex color integer literals (`0xRRGGBB` / `0xAARRGGBB`, 6–8 hex
+magic_constants gate, 0.6.x–0.9.x) flags magic literals. Two checks per
+file: (a) hex color integer literals (`0xRRGGBB` / `0xAARRGGBB`, 6–8 hex
 digits) outside named constant declarations — every line spanned by a
-`const` initializer (call arguments inside it included) is exempt;
-(b) numeric (by raw lexeme) and string literals (value length ≥ 4)
-whose value repeats 3+ times in one file — every occurrence is
-reported as `literal <value> repeats N times — extract a named
-constant`. Template literals with interpolations are skipped; plain
-no-interpolation templates count as strings. Defaults are baked in
-(min_duplicates=3, min_length=4, hex rule on) — crap4js has no config.
-Any `--flag` argument is a usage error (exit 1). Exit 2 iff violations
-exist.
+`const` initializer (the full nested subtree: call arguments, object
+elements, nested calls) is exempt; (b) numeric (by raw lexeme) and string
+literals (value length ≥ 4) whose value repeats 3+ times in one file —
+every occurrence is reported as `literal <value> repeats N times —
+extract a named constant`. Lines inside a `const` initializer are exempt
+from the duplicates check too. String literals in identifier positions —
+object/dict keys, computed member indexes (`obj['name']`), switch case
+labels — are never counted: they name protocol values (JSON fields,
+channels, enums), not constants. Template literals with interpolations
+are skipped; plain no-interpolation templates count as strings. Defaults
+are baked in (min_duplicates=3, min_length=4, hex rule on) — crap4js has
+no config. Any `--flag` argument is a usage error (exit 1). Exit 2 iff
+violations exist.
+
+## `test-assertions`
+
+`crap4js test-assertions [paths...]` (port of crap4dart's test_assertions
+gate, 0.9.x, mapped to node:test) flags `test()`/`it()` bodies that contain
+zero assertion calls — a test without assertions compiles, runs green, and
+verifies nothing. Counted as assertions:
+
+- any call through a binding imported from `node:assert`/`assert`
+  (including `/strict` variants): default calls (`assert(x)`), member
+  calls (`assert.strictEqual(...)`), and destructured/renamed named
+  imports (`ok(x)`, `equal(...)`) — every export of the assert module is
+  an assertion;
+- `t.assert.*` calls on the node:test context parameter.
+
+`test.skip`/`it.only` forms are checked too; body-less forms (`test.todo`)
+are skipped; tests inside `describe()` callbacks are checked individually.
+Default file set: `test/` recursively plus colocated `*.test.js`/
+`*.spec.js` under `src/`; explicit paths are kept verbatim. min_assertions
+(default 1) is baked in. Exit 2 iff violations exist.
+
+## `folder-structure`
+
+`crap4js folder-structure` (port of crap4dart's folder_structure gate,
+0.9.x) flags directories containing more than `max_loose_files` (default
+0) source files DIRECTLY — a flat-file sprawl that should be organized
+into feature packages. Only direct children of `src/` (the port's source
+root) count; files in subdirectories are the organized form. Violation:
+`N loose files directly in src — group them into feature packages
+(max 0)`. Takes no arguments (any argument is a usage error); the
+directory and threshold are baked in. Exit 2 iff violations exist.
 
 ## `skill`
 
@@ -312,6 +357,8 @@ crap4js/
     unusedFiles.js unused-files command
     bannedImports.js  banned-imports command
     magicConstants.js  magic-constants command
+    testAssertions.js  test-assertions command
+    folderStructure.js  folder-structure command
     gateCommon.js  shared gate-subcommand runner
     imports.js     import-specifier collection + resolution
     skill.js       skill command text
@@ -329,6 +376,9 @@ crap4js/
     unusedCode.test.js
     unusedFiles.test.js
     bannedImports.test.js
+    magicConstants.test.js
+    testAssertions.test.js
+    folderStructure.test.js
     profile.test.js
     skill.test.js
     cli.test.js

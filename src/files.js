@@ -81,8 +81,10 @@ function inSrc(resolved, srcDir) {
 /**
  * Expand a mix of file and directory args into a sorted, deduped list of
  * absolute source-file paths. Files are kept as-is; directories are walked.
+ * `keep(p, stat)` decides which files qualify (default: source files,
+ * test files excluded).
  */
-export function expandPaths(args, projectRoot) {
+export function expandPaths(args, projectRoot, keep = isSourceFile) {
   const result = new Set();
   for (const arg of args) {
     const p = path.resolve(projectRoot, arg);
@@ -93,8 +95,8 @@ export function expandPaths(args, projectRoot) {
       continue;
     }
     if (st.isDirectory()) {
-      for (const f of walkSourceDir(p)) result.add(f);
-    } else if (isSourceFile(p, st)) {
+      for (const f of walkDir(p, keep)) result.add(f);
+    } else if (keep(p, st)) {
       result.add(p);
     }
   }
@@ -102,13 +104,18 @@ export function expandPaths(args, projectRoot) {
 }
 
 function walkSourceDir(dir) {
+  return walkDir(dir, isSourceFile);
+}
+
+// Walk a directory tree for real files accepted by `keep(path, stat)`.
+function walkDir(dir, keep) {
   const out = [];
   for (const e of readEntries(dir)) {
     if (e === 'node_modules') continue;
     const p = path.join(dir, e);
     const st = statOrSkip(p);
-    if (st?.isDirectory()) out.push(...walkSourceDir(p));
-    else if (isSourceFile(p, st)) out.push(p);
+    if (st?.isDirectory()) out.push(...walkDir(p, keep));
+    else if (keep(p, st)) out.push(p);
   }
   return out.sort();
 }
@@ -152,6 +159,28 @@ export function gateFiles(paths, projectRoot) {
   const files =
     paths.length > 0 ? expandPaths(paths, projectRoot) : findSourceFiles(projectRoot);
   return files.filter((f) => !isTestPath(f));
+}
+
+// True for real files with a source extension — test files included.
+function isAnySourceFile(p, st) {
+  return st?.isFile() && SOURCE_EXTS.has(path.extname(p));
+}
+
+// Files the test-file subcommand applies to: explicit CLI paths (files
+// kept verbatim, directories walked — test files included) or the default
+// walk of <root>/test/ plus colocated test files under src/.
+export function testFiles(paths, projectRoot) {
+  if (paths.length > 0) return expandPaths(paths, projectRoot, isAnySourceFile);
+  return [
+    ...walkDir(path.join(projectRoot, 'test'), isAnySourceFile),
+    ...walkDir(path.join(projectRoot, 'src'), isAnySourceFile).filter(isTestFile),
+  ].sort();
+}
+
+// Source files directly inside <dir>, non-recursive — the loose-file count
+// for the folder-structure gate.
+export function looseSourceFiles(dir) {
+  return readEntries(dir).filter((e) => isAnySourceFile(e, statOrSkip(path.join(dir, e))));
 }
 
 // Project-relative POSIX path (forward slashes) for report lines.

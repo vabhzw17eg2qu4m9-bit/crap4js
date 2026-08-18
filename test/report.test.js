@@ -62,6 +62,27 @@ test('all-N/A report: max 0.0, verdict passed', () => {
   assert.match(out, /Max CRAP: 0\.0 \(threshold 8\.0\) — passed/);
 });
 
+test('N/A rows tie-break by file then line for stable ordering (0.8.7)', () => {
+  const mk = (methodName, file, startLine) => ({
+    methodName,
+    file,
+    startLine,
+    complexity: 1,
+    coverage: null,
+    crapScore: null,
+  });
+  // Deliberately unordered input — the table must not shuffle between runs.
+  const out = formatReport(
+    [mk('late', 'src/z.js', 9), mk('second', 'src/a.js', 5), mk('first', 'src/a.js', 2)],
+    { threshold: 8.0 },
+  );
+  const rows = out.split('\n').filter((l) => /^(late|second|first)\s/.test(l));
+  assert.deepEqual(
+    rows.map((r) => r.trim().split(/\s+/)[0]),
+    ['first', 'second', 'late'],
+  );
+});
+
 test('passed verdict when max <= threshold', () => {
   const metrics = [
     {

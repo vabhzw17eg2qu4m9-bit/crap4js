@@ -45,6 +45,9 @@ Console columns:
 | \`MAX(µs)\`    | Worst single call                        |
 | \`@60fps(ms)\` | Cost if called every frame (mean × 60)   |
 
+Means marked \`~\` are sub-30µs — instrumentation overhead dominates there;
+read the CALLS/TOTAL deltas for those methods instead.
+
 Full (untruncated) reports are saved to \`profile-reports/\` as
 \`profile-<timestamp>.txt\` and \`.json\`.
 
