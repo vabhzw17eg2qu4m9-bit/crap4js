@@ -289,3 +289,35 @@ class Counter {
   assert.ok(m, 'private method not extracted');
   assert.equal(m.complexity, 2);
 });
+
+test('stage-3 accessor field with decorator parses; methods keep their complexity', () => {
+  const src = `
+class A {
+  @dec accessor x = 1;
+  m(v) {
+    if (v) return 1;
+    return 2;
+  }
+}
+`;
+  const methods = extractMethods(src);
+  const m = find(methods, 'A.m');
+  assert.ok(m, 'method inside accessor-field class not extracted');
+  assert.equal(m.complexity, 2);
+});
+
+test('decorated class: complexity counting unchanged', () => {
+  const src = `
+class A {
+  @dec method(a) {
+    if (a) return 1;
+    return a > 0 ? 2 : 3;
+  }
+}
+`;
+  const methods = extractMethods(src);
+  const m = find(methods, 'A.method');
+  assert.ok(m, 'decorated method not extracted');
+  // base 1 + 1 if + 1 ternary = 3 — decorators add nothing
+  assert.equal(m.complexity, 3);
+});

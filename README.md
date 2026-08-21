@@ -32,10 +32,13 @@ change because it is both hard to understand and under-tested.
 ## Install
 
 ```bash
-npm i -D crap4js
+npm i -D github:vabhzw17eg2qu4m9-bit/crap4js
 # or run ad-hoc:
 npx crap4js
 ```
+
+> **Warning:** the `crap4js` package on npm is an unrelated third-party
+> project — install from GitHub as shown above.
 
 Runtime requirement: Node.js ≥ 20. The only runtime dependency is `acorn`.
 
