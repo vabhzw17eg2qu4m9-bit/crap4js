@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.2](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.6.1...v0.6.2) (2026-08-21)
+
+
+### Bug Fixes
+
+* parse stage-3 accessor decorators and correct install docs ([#22](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/22)) ([feada92](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/feada924e88c0e29f11d6912f066d51da4f89480))
+
 ## [0.6.1](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.6.0...v0.6.1) (2026-08-21)
 
 
