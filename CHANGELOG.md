@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.6.0...v0.6.1) (2026-08-21)
+
+
+### Bug Fixes
+
+* port crap4dart 0.9.3/0.9.4 profile and test-assertions fixes ([#20](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/20)) ([87f7b2b](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/87f7b2b71b7f7f30cbc2abe2bc8b9939a5632d4c))
+
 ## [0.6.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.5.0...v0.6.0) (2026-08-18)
 
 
