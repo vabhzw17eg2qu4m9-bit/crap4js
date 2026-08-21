@@ -78,6 +78,26 @@ test('declaring a private name does not strip its references (0.7.1 regression)'
   }
 });
 
+test('decorator identifiers count as references (decorated class not flagged)', () => {
+  const root = fixture({
+    // `dec` appears only as a decorator — the lexical identifier walk must
+    // still see it, and the accessor-field class must parse at all.
+    'decorated.js': [
+      'function dec(t) { return t; }',
+      'class A {',
+      '  @dec accessor x = 1;',
+      '}',
+      'export default A;',
+    ].join('\n'),
+  });
+  try {
+    const { violations } = unusedCodeViolations(gateFiles([], root), root);
+    assert.deepEqual(violations, []);
+  } finally {
+    cleanup(root);
+  }
+});
+
 test('exported declarations are module-public and never flagged', () => {  const root = fixture({
     'api.js': [
       'const internal = 1;',

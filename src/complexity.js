@@ -42,12 +42,14 @@ const SKIP_KEYS = new Set([
 ]);
 
 // Shared by both plugin routes; only the type-syntax plugin differs because
-// @babel/parser refuses to combine flow and typescript.
+// @babel/parser refuses to combine flow and typescript. decorators-legacy
+// plus decoratorAutoAccessors cover stage-3 decorator syntax (`accessor`
+// fields included).
 const COMMON_PLUGINS = [
-  'jsx', 'decorators-legacy', 'classProperties', 'classPrivateProperties',
-  'classPrivateMethods', 'objectRestSpread', 'optionalChaining',
-  'nullishCoalescingOperator', 'dynamicImport', 'exportDefaultFrom',
-  'asyncGenerators', 'topLevelAwait',
+  'jsx', 'decorators-legacy', 'decoratorAutoAccessors', 'classProperties',
+  'classPrivateProperties', 'classPrivateMethods', 'objectRestSpread',
+  'optionalChaining', 'nullishCoalescingOperator', 'dynamicImport',
+  'exportDefaultFrom', 'asyncGenerators', 'topLevelAwait',
 ];
 const FLOW_PLUGINS = [...COMMON_PLUGINS, 'flow'];
 const TS_PLUGINS = [...COMMON_PLUGINS, 'typescript'];
