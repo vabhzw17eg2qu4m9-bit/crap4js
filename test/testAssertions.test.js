@@ -109,6 +109,31 @@ test('it(), test.skip and describe-nested tests are all checked', () => {
   assert.deepEqual(v.map((x) => x.line), [2, 3, 5]);
 });
 
+test('trailing options objects cannot hide or fake the body (0.9.4)', () => {
+  const src = [
+    "import test, { it } from 'node:test';",
+    "import assert from 'node:assert';",
+    // Trailing/leading options: taking the LAST argument as the body made
+    // the gate pick the options object, so these tests were never checked.
+    "test('skipped but empty', () => {",
+    '  compute();',
+    '}, { skip: true });',
+    "test('asserted despite skip', () => assert.equal(1 + 1, 2), { skip: true });",
+    "it('empty with options before body', { timeout: 5000 }, () => {});",
+    "test.skip('skip modifier with trailing timeout', () => assert.ok(true), { timeout: 30 });",
+    "test.todo('todo has no body');",
+    '',
+  ].join('\n');
+  const v = violationsOf(src);
+  assert.equal(v.length, 2);
+  const names = v.map((x) => x.message);
+  assert.ok(names.some((m) => m.includes("'skipped but empty'")));
+  assert.ok(names.some((m) => m.includes("'empty with options before body'")));
+  assert.ok(!names.some((m) => m.includes('asserted despite skip')));
+  assert.ok(!names.some((m) => m.includes('skip modifier with trailing timeout')));
+  assert.ok(!names.some((m) => m.includes('todo has no body')));
+});
+
 test('assertions inside nested closures within the test body count', () => {
   const src = [
     "import test from 'node:test';",

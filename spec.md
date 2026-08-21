@@ -201,7 +201,14 @@ timing. Defaults: `--top 20`, threshold off. `--name` is passed to
 they are remapped from the project root into the instrumented temp copy and
 appended to `node --test` (paths outside the root pass through unchanged) —
 running the original, non-instrumented test files would record no timings
-(crap4dart 0.9.2 fix). The FULL `src/` set is always instrumented and
+(crap4dart 0.9.2 fix). Explicit paths are the ONLY selectors handed to
+`node --test` — no default suite selector is ever appended alongside them;
+bare `node --test` (default whole-suite discovery) runs only when no paths
+are given (crap4dart 0.9.3 — N/A for the port: upstream unconditionally
+appended a `test` directory selector, which `flutter test` treats as a
+selector, profiling the whole suite; `node --test` treats positional paths
+as the complete run set, so the port's argv was already exclusive — pinned
+by a regression test). The FULL `src/` set is always instrumented and
 attributed, so a narrow test selection never shrinks the report.
 
 How it works (port of crap4dart 0.4.0 / 0.9.x fixes):
@@ -404,6 +411,12 @@ closures included):
   imports (`ok(x)`); every export of the assert module is an assertion;
 - `t.assert.*` member calls on the test-context parameter (the body
   function's first parameter).
+
+The body is the first FUNCTION argument, so metadata can never hide or
+fake it: node:test accepts options on either side of the body —
+`test('n', fn, {skip: true})` and `test('n', {skip: true}, fn)` — and a
+trailing options object is never mistaken for the body (crap4dart 0.9.4
+fix; upstream had picked the LAST argument as the body).
 
 `test.skip`/`it.only` registration forms are checked; body-less forms
 (`test.todo('x')`) are skipped; tests nested in `describe()` callbacks

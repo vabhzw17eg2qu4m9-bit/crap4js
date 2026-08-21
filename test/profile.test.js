@@ -229,6 +229,62 @@ test('profile positional path selects the test to run from the instrumented copy
   }
 });
 
+test('profile with explicit path runs ONLY it — no default suite appended (0.9.3)', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'crap4js-profile-only-'));
+  try {
+    mkdirSync(path.join(root, 'src'));
+    mkdirSync(path.join(root, 'test'));
+    writeFileSync(path.join(root, 'package.json'), '{"type":"module"}');
+    writeFileSync(
+      path.join(root, 'src', 'add.js'),
+      'export function add(a, b) {\n  return a + b;\n}\n',
+    );
+    writeFileSync(
+      path.join(root, 'src', 'mul.js'),
+      'export function mul(a, b) {\n  return a * b;\n}\n',
+    );
+    writeFileSync(
+      path.join(root, 'test', 'add.test.js'),
+      [
+        "import test from 'node:test';",
+        "import assert from 'node:assert';",
+        "import { add } from '../src/add.js';",
+        "test('add works', () => assert.equal(add(1, 2), 3));",
+        '',
+      ].join('\n'),
+    );
+    writeFileSync(
+      path.join(root, 'test', 'mul.test.js'),
+      [
+        "import test from 'node:test';",
+        "import assert from 'node:assert';",
+        "import { mul } from '../src/mul.js';",
+        "test('mul works', () => assert.equal(mul(2, 2), 4));",
+        '',
+      ].join('\n'),
+    );
+    // Only mul.test.js is handed to `node --test`: the other test file must
+    // not run, so only mul gets timings and appears in the report. The port
+    // never appends a default suite selector alongside explicit paths
+    // (crap4dart 0.9.3 — node --test treats positional paths as the whole
+    // run set, so this pins the already-correct contract).
+    const r = runCli(root, ['profile', 'test/mul.test.js']);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /Profile Report \(1 methods/);
+    assert.match(r.stdout, /mul\s+src\/mul\.js:1/);
+    assert.doesNotMatch(r.stdout, /add/);
+
+    // Without paths, default discovery still runs the whole suite.
+    const all = runCli(root, ['profile']);
+    assert.equal(all.status, 0, all.stderr);
+    assert.match(all.stdout, /add\s+src\/add\.js:1/);
+    assert.match(all.stdout, /mul\s+src\/mul\.js:1/);
+    assert.ok(!existsSync(path.join(root, '.crap_profile_temp')));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('profile survives failing tests: warns on stderr, still reports', () => {
   const root = mkdtempSync(path.join(tmpdir(), 'crap4js-profile-fail-'));
   try {
