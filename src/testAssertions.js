@@ -74,8 +74,12 @@ function findTests(program) {
   walk(program, (n) => {
     if (n.type !== CALL) return;
     const kind = registrarOf(n.callee);
-    const fn = n.arguments.at(-1);
-    if (kind && isFunction(fn)) {
+    if (!kind) return;
+    // node:test accepts metadata around the body — `test('n', fn, {skip:true})`
+    // and `test('n', {skip:true}, fn)`. The body is the first FUNCTION
+    // argument, never the last argument (which may be an options object).
+    const fn = n.arguments.find(isFunction);
+    if (fn) {
       tests.push({
         name: labelOf(n, kind),
         line: n.loc.start.line,
