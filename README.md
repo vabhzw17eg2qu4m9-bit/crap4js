@@ -147,16 +147,23 @@ is printed to stderr and the CLI exits 1.
 
 `crap4js profile [--name <pattern>] [--threshold <ms>] [--top <N>] [paths...]`
 is a source-instrumentation profiler (ported from crap4dart 0.4.0): it makes
-an instrumented temp copy of the project with every function body wrapped in
-`performance.now()` + `try/finally`, runs `node --test` against it, and
-reports exact per-function timing:
+an instrumented temp copy of the project where every function body reports
+entry/exit to a collector (which keeps a call stack of open calls), runs
+`node --test` against it, and reports exact per-function timing:
 
 ```
-Profile Report (12 methods, total 87.51ms)
-TOTAL(ms)      %  CALLS   MEAN(µs)   MAX(µs)  @60fps(ms) METHOD                         FILE:LINE
---------------------------------------------------------------------------------------------------
-     18.23  20.8%     31      588.0      4200       35.28 walkForEntries                 src/complexity.js:164
+Profile Report (2 methods, total 11.44ms)
+     TOTAL       SELF      %  CALLS   MEAN(µs)   MAX(µs)  @60fps(ms) METHOD                         FILE:LINE
+-------------------------------------------------------------------------------------------------------------
+   11.04ms    10.68ms  96.6%      1    11044.0     11044      662.64 slow                           src/add.js:4
+    0.39ms     0.39ms   3.4%   1001       ~0.4       316        0.02 add                            src/add.js:1
 ```
+
+- **TOTAL** — inclusive time across all calls; **SELF** — TOTAL minus
+  nested profiled calls (flamegraph self-time — ranks hot code by actual
+  CPU burn). TOTAL, SELF, and the summary total render with adaptive units
+  (`82.50ms`, `13.89s`, `22.50m`, `13.89h`) so extreme call counts stay
+  compact.
 
 Defaults: `--top 20`, threshold off. Full reports are written to
 `profile-reports/profile-<timestamp>.txt` and `.json`. Exit 2 when any

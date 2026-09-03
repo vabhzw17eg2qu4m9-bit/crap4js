@@ -14,9 +14,9 @@ Use this skill when the user wants to:
 
 ## What is crap4js profile?
 
-\`crap4js profile\` is a source-instrumentation profiler. It wraps every
-function body in the analyzed sources with \`performance.now()\` +
-\`try/finally\`, runs \`node --test\` against the instrumented copy, and
+\`crap4js profile\` is a source-instrumentation profiler. It reports every
+function's entry/exit to a collector (which keeps a stack of open calls and
+their timing), runs \`node --test\` against the instrumented copy, and
 reports exact per-function timing.
 
 Unlike sampling profilers (statistical), this gives **exact** timing for
@@ -37,9 +37,9 @@ crap4js profile test/report.test.js   # specific path
 Console columns:
 
 | Column       | Meaning                                  |
-|--------------|------------------------------------------|
-| \`TOTAL(ms)\`  | Total time across all calls              |
-| \`%\`          | Share of total profiling time            |
+| \`TOTAL\`      | Total time across all calls (inclusive of nested profiled calls), adaptive units — \`82.50ms\`, \`13.89s\`, \`22.50m\`, \`13.89h\` |
+| \`SELF\`       | TOTAL minus nested profiled calls (flamegraph self-time)  |
+| \`%\`          | Share of total profiling time                            |
 | \`CALLS\`      | Number of invocations                    |
 | \`MEAN(µs)\`   | Average time per call                    |
 | \`MAX(µs)\`    | Worst single call                        |
@@ -53,15 +53,18 @@ Full (untruncated) reports are saved to \`profile-reports/\` as
 
 ## Analyzing Results
 
-1. **High TOTAL + high CALLS** — function called too often. Cache/debounce it.
-2. **High MEAN** — single call is expensive. Algorithm/data structure issue.
-3. **High MAX >> MEAN** — occasional spikes. GC, I/O, or contention.
+1. **High SELF** — the function's own body burns the CPU. Fix the code inside it.
+2. **High TOTAL, low SELF** — time spent in callees; look at what it calls.
+3. **High MEAN** — single call is expensive. Algorithm/data structure issue.
+4. **High MAX >> MEAN** — occasional spikes. GC, I/O, or contention.
 
 ## How It Works
 
 1. Creates \`.crap_profile_temp/\` with an instrumented copy of the analyzed
    sources (inside the project root, so \`node_modules\` resolves normally)
-2. Every function body wrapped in \`performance.now()\` + \`try/finally\`
+2. Every function body reports \`__crap_enter\`/\`__crap_exit\` in a
+   \`try/finally\`; the collector keeps a call stack of open calls, so TOTAL
+   is inclusive and SELF excludes nested profiled calls
 3. A collector is preloaded via \`NODE_OPTIONS --import\`; it merges timing
    data across test processes with atomic file writes
 4. \`node --test\` runs against the copy; timings are attributed to the

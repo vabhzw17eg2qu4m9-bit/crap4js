@@ -24,15 +24,15 @@ function runCli(cwd, args) {
   });
 }
 
-test('instrumentSource wraps function bodies in try/finally + record', () => {
+test('instrumentSource wraps function bodies in enter + try/finally-exit', () => {
   const src = `export function add(a, b) {
   return a + b;
 }
 `;
   const out = instrumentSource(src, { ext: '.js', relFile: 'src/add.js' });
-  assert.match(out, /const __crap_t0 = performance\.now\(\);/);
+  assert.match(out, /__crap_enter\("src\/add\.js\|add"\);/);
   assert.match(out, /try \{/);
-  assert.match(out, /__crap_record\("src\/add\.js\|add", __crap_t0\);/);
+  assert.match(out, /__crap_exit\("src\/add\.js\|add"\);/);
   // The instrumented source still parses and yields the same entry.
   const methods = extractMethods(out, { ext: '.js' });
   assert.equal(methods.length, 1);
@@ -50,9 +50,9 @@ test('instrumentSource wraps nested and class methods, skips arrow expressions',
 export const id = (x) => x;
 `;
   const out = instrumentSource(src, { ext: '.js', relFile: 'calc.js' });
-  assert.match(out, /__crap_record\("calc\.js\|Calc\.twice"/);
-  assert.match(out, /__crap_record\("calc\.js\|inc"/);
-  assert.match(out, /__crap_record\("calc\.js\|Calc\.one"/);
+  assert.match(out, /__crap_enter\("calc\.js\|Calc\.twice"/);
+  assert.match(out, /__crap_enter\("calc\.js\|inc"/);
+  assert.match(out, /__crap_enter\("calc\.js\|Calc\.one"/);
   // Arrow with an expression body has no block to wrap.
   assert.doesNotMatch(out, /calc\.js\|id/);
   extractMethods(out, { ext: '.js' }); // must not throw
@@ -67,9 +67,15 @@ test('collector aggregates calls/min/max and merges across processes', () => {
     writeFileSync(
       path.join(root, 'driver.mjs'),
       `
-      globalThis.__crap_record('src/a.js|f', performance.now() - 0.5);
-      globalThis.__crap_record('src/a.js|f', performance.now() - 1.5);
-      globalThis.__crap_record('src/b.js|g', performance.now() - 0.2);
+      const busy = (ms) => { const end = performance.now() + ms; while (performance.now() < end); };
+      for (let i = 0; i < 2; i++) {
+        globalThis.__crap_enter('src/a.js|f');
+        busy(0.5);
+        globalThis.__crap_exit('src/a.js|f');
+      }
+      globalThis.__crap_enter('src/b.js|g');
+      busy(0.2);
+      globalThis.__crap_exit('src/b.js|g');
       `,
     );
     const run = (file) =>
@@ -87,7 +93,89 @@ test('collector aggregates calls/min/max and merges across processes', () => {
     assert.equal(data['src/a.js|f'].calls, 4); // 2 runs x 2 calls, merged
     assert.ok(data['src/a.js|f'].totalMicros >= 4 * 400);
     assert.ok(data['src/a.js|f'].minMicros <= data['src/a.js|f'].maxMicros);
+    assert.ok(data['src/a.js|f'].totalSelfMicros <= data['src/a.js|f'].totalMicros);
     assert.equal(data['src/b.js|g'].calls, 2);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Regression for crap4dart 0.9.5: the collector used to merge its CUMULATIVE
+// in-memory counters into the output file on every flush (every 5 calls) and
+// again at exit, inflating calls/total quadratically — 43 real calls merged
+// as 5+10+...+40 = 180+ with impossible TOTALs.
+test('collector flushes deltas only — counters stay exact across flushes (0.9.5)', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'crap4js-collector-flush-'));
+  try {
+    const preload = path.join(root, 'preload.mjs');
+    const output = path.join(root, 'out.json');
+    writeFileSync(preload, COLLECTOR_SOURCE);
+    writeFileSync(
+      path.join(root, 'driver.mjs'),
+      `
+      for (let i = 0; i < 43; i++) {
+        globalThis.__crap_enter('src/a.js|f');
+        globalThis.__crap_exit('src/a.js|f');
+      }
+      `,
+    );
+    const run = spawnSync(process.execPath, [path.join(root, 'driver.mjs')], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CRAP_PROFILE_OUTPUT: output,
+        NODE_OPTIONS: `--import ${pathToFileURL(preload).href}`,
+      },
+    });
+    assert.equal(run.status, 0, run.stderr);
+    const data = JSON.parse(readFileSync(output, 'utf8'));
+    assert.equal(data['src/a.js|f'].calls, 43); // 8 auto-flushes + exit flush, deltas only
+    assert.ok(data['src/a.js|f'].totalMicros < 10000);
+    assert.equal(data['src/a.js|f'].totalSelfMicros, data['src/a.js|f'].totalMicros);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('collector self time excludes nested call time (0.9.5)', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'crap4js-collector-self-'));
+  try {
+    const preload = path.join(root, 'preload.mjs');
+    const output = path.join(root, 'out.json');
+    writeFileSync(preload, COLLECTOR_SOURCE);
+    writeFileSync(
+      path.join(root, 'driver.mjs'),
+      `
+      const busy = (ms) => { const end = performance.now() + ms; while (performance.now() < end); };
+      globalThis.__crap_enter('src/a.js|outer');
+      busy(1);
+      globalThis.__crap_enter('src/b.js|inner');
+      busy(2);
+      globalThis.__crap_exit('src/b.js|inner');
+      globalThis.__crap_exit('src/a.js|outer');
+      `,
+    );
+    const run = spawnSync(process.execPath, [path.join(root, 'driver.mjs')], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CRAP_PROFILE_OUTPUT: output,
+        NODE_OPTIONS: `--import ${pathToFileURL(preload).href}`,
+      },
+    });
+    assert.equal(run.status, 0, run.stderr);
+    const data = JSON.parse(readFileSync(output, 'utf8'));
+    const outer = data['src/a.js|outer'];
+    const inner = data['src/b.js|inner'];
+    assert.equal(outer.calls, 1);
+    assert.equal(inner.calls, 1);
+    // The nested call is fully contained in the parent's inclusive time.
+    assert.ok(outer.totalMicros >= inner.totalMicros);
+    // Parent's SELF excludes the nested call; the child keeps its own.
+    assert.ok(outer.totalSelfMicros <= outer.totalMicros - inner.totalMicros);
+    assert.ok(outer.totalSelfMicros >= 0);
+    assert.ok(inner.totalSelfMicros >= 0);
+    assert.ok(inner.totalSelfMicros <= inner.totalMicros);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -100,7 +188,7 @@ test('formatProfileReport sorts by TOTAL, limits top, formats threshold line', (
   ];
   const out = formatProfileReport(profiles, { top: 1, thresholdMs: 0.5 });
   assert.match(out, /Profile Report \(2 methods, total 1\.00ms\)/);
-  assert.match(out, /TOTAL\(ms\)/);
+  assert.match(out, /TOTAL\s+SELF/);
   assert.match(out, /@60fps\(ms\)/);
   assert.ok(out.includes('slow') && !out.includes('fast')); // top=1, sorted desc
   assert.match(out, /90\.0%/);
@@ -130,6 +218,33 @@ test('formatProfileReport marks sub-30µs means with ~ (0.9.2)', () => {
   assert.match(out, /\s300\.0\s/);
   assert.doesNotMatch(out, /~300\.0/);
   assert.match(out, /~12\.0/);
+});
+
+test('formatProfileReport renders TOTAL/SELF with adaptive units (0.9.5)', () => {
+  const report = (totalMicros) =>
+    formatProfileReport(
+      [{ method: 'f', file: 'f.js', line: 1, calls: 1, totalMicros, totalSelfMicros: 0, minMicros: 1, maxMicros: totalMicros }],
+      { top: 1 },
+    );
+  // Tiers: <1000ms, <60s, <60m, else hours — always 2 decimals.
+  assert.match(report(999_950), /total 999\.95ms/);
+  assert.match(report(1_000_000), /total 1\.00s/);
+  assert.match(report(59_999_000), /total 60\.00s/); // 59999ms rounds up inside the s tier
+  assert.match(report(60_000_000), /total 1\.00m/);
+  assert.match(report(3_599_999_000), /total 60\.00m/); // 3599999ms rounds up inside the m tier
+  assert.match(report(3_600_000_000), /total 1\.00h/);
+  // Tens of billions of calls used to render a wall of digits (`50000000.00`).
+  assert.match(report(50_000_000_000), /total 13\.89h/);
+});
+
+test('formatProfileReport shows SELF from totalSelfMicros (0.9.5)', () => {
+  const profiles = [
+    { method: 'outer', file: 'src/a.js', line: 1, calls: 100, totalMicros: 5000000, totalSelfMicros: 2000000, minMicros: 100, maxMicros: 90000 },
+  ];
+  const out = formatProfileReport(profiles, { top: 1 });
+  assert.match(out, /TOTAL\s+SELF\s+%\s+CALLS/); // SELF right after TOTAL
+  assert.match(out, /5\.00s/); // TOTAL — inclusive
+  assert.match(out, /2\.00s/); // SELF
 });
 
 test('parseProfileArgs rejects unknown flags and bad values', () => {
@@ -178,6 +293,7 @@ test('profile end-to-end: instrumented run reports methods and writes reports', 
     const json = JSON.parse(readFileSync(reports.json[0], 'utf8'));
     assert.equal(json.methods[0].method, 'add');
     assert.ok(json.methods[0].totalMicros > 0);
+    assert.ok(json.methods[0].totalSelfMicros >= 0); // 0.9.5 JSON contract
     // Temp copy cleaned up.
     assert.ok(!existsSync(path.join(root, '.crap_profile_temp')));
 
