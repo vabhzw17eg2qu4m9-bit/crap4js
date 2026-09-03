@@ -33,27 +33,68 @@ const DEFAULT_TOP = 20;
 
 // Source of the collector preload written into the temp copy and injected
 // into every node process via NODE_OPTIONS `--import`. It installs
-// globalThis.__crap_record and merges per-method stats into the output file
-// (temp file + rename) on every flush, so parallel test processes aggregate
-// without races — `node --test` runs each test file in its own process.
+// globalThis.__crap_enter/__crap_exit and merges per-method stats into the
+// output file (temp file + rename) on every flush, so parallel test
+// processes aggregate without races — `node --test` runs each test file in
+// its own process.
 const COLLECTOR_SOURCE = `
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 
 const stats = new Map();
+const stack = [];
 let calls = 0;
 
-globalThis.__crap_record = (key, startMs) => {
-  const micros = Math.max(0, Math.round((performance.now() - startMs) * 1000));
-  const s = stats.get(key) || { calls: 0, totalMicros: 0, minMicros: Infinity, maxMicros: 0 };
+// Marks method entry; paired with __crap_exit via try/finally by the
+// instrumented code. The collector owns the timing: one stack frame per
+// open call.
+globalThis.__crap_enter = (key) => {
+  stack.push({ key, start: performance.now(), childMicros: 0 });
+};
+
+// Marks method exit: inclusive = wall time of the call (nested instrumented
+// calls included), self = inclusive minus the nested call time that
+// completed while the frame was open — flamegraph self-time semantics.
+// ponytail: one GLOBAL stack — exact upstream Dart semantics; on the
+// single-threaded event loop, async calls that await other instrumented
+// functions interleave frames on it, so their TOTAL includes awaits and
+// SELF follows event-loop nesting, not async causality. Upgrade path if
+// per-promise attribution is ever needed: per-async-context stacks via
+// node:async_hooks.
+globalThis.__crap_exit = (key) => {
+  const frame = stack.pop();
+  if (!frame) return;
+  const inclusive = Math.max(0, Math.round((performance.now() - frame.start) * 1000));
+  const self = Math.max(0, inclusive - frame.childMicros);
+  if (stack.length > 0) stack[stack.length - 1].childMicros += inclusive;
+  const s = stats.get(key) || newStats();
   s.calls++;
-  s.totalMicros += micros;
-  if (micros < s.minMicros) s.minMicros = micros;
-  if (micros > s.maxMicros) s.maxMicros = micros;
+  s.totalMicros += inclusive;
+  s.totalSelfMicros += self;
+  if (inclusive < s.minMicros) s.minMicros = inclusive;
+  if (inclusive > s.maxMicros) s.maxMicros = inclusive;
   stats.set(key, s);
-  if (++calls % 5 === 0) flush(); // flush every 5 records (0.9.2)
+  if (++calls % 5 === 0) flush(); // flush every 5 calls (0.9.2)
 };
 
 process.on('exit', flush);
+
+function newStats() {
+  return {
+    calls: 0,
+    totalMicros: 0,
+    totalSelfMicros: 0,
+    minMicros: Infinity,
+    maxMicros: 0,
+    // Last values already merged into the output file. Flushes merge only
+    // the DELTA since the last successful flush — merging the cumulative
+    // values instead re-adds them on every flush, inflating counters
+    // quadratically (0.9.5 fix: a hot loop reported tens of billions of
+    // calls).
+    flushedCalls: 0,
+    flushedTotalMicros: 0,
+    flushedTotalSelfMicros: 0,
+  };
+}
 
 function flush() {
   const out = process.env.CRAP_PROFILE_OUTPUT;
@@ -64,6 +105,13 @@ function flush() {
   try {
     writeFileSync(tmp, JSON.stringify(merged));
     renameSync(tmp, out);
+    // Snapshots advance only after a successful write — a failed flush
+    // retries the same delta next time (at-least-once).
+    for (const s of stats.values()) {
+      s.flushedCalls = s.calls;
+      s.flushedTotalMicros = s.totalMicros;
+      s.flushedTotalSelfMicros = s.totalSelfMicros;
+    }
   } catch {
     // Best effort — a lost flush only loses timing precision.
   }
@@ -84,13 +132,25 @@ function readMerged(out) {
 }
 
 function mergeEntry(merged, key, s) {
+  // Only the delta since the last successful flush is added — the
+  // cumulative values were already written by previous flushes (0.9.5).
+  const deltaCalls = s.calls - s.flushedCalls;
+  const deltaTotal = s.totalMicros - s.flushedTotalMicros;
+  const deltaSelf = s.totalSelfMicros - s.flushedTotalSelfMicros;
   const ex = merged[key];
   if (!ex) {
-    merged[key] = { calls: s.calls, totalMicros: s.totalMicros, minMicros: s.minMicros, maxMicros: s.maxMicros };
+    merged[key] = {
+      calls: deltaCalls,
+      totalMicros: deltaTotal,
+      totalSelfMicros: deltaSelf,
+      minMicros: s.minMicros,
+      maxMicros: s.maxMicros,
+    };
     return;
   }
-  ex.calls += s.calls;
-  ex.totalMicros += s.totalMicros;
+  ex.calls += deltaCalls;
+  ex.totalMicros += deltaTotal;
+  ex.totalSelfMicros += deltaSelf;
   ex.minMicros = Math.min(ex.minMicros, s.minMicros);
   ex.maxMicros = Math.max(ex.maxMicros, s.maxMicros);
 }
@@ -294,7 +354,7 @@ export function formatProfileReport(profiles, { top = DEFAULT_TOP, thresholdMs }
   const total = totalMicros(sorted);
   const shown = top > 0 ? sorted.slice(0, top) : sorted;
   const header = tableHeader();
-  let out = `Profile Report (${profiles.length} methods, total ${ms(total)}ms)\n`;
+  let out = `Profile Report (${profiles.length} methods, total ${fmtTotal(total / MICROS_PER_MILLIS)})\n`;
   out += `${header}\n${'-'.repeat(header.length)}\n`;
   for (const p of shown) {
     out += profileRow(p, total) + '\n';
@@ -306,7 +366,9 @@ export function formatProfileReport(profiles, { top = DEFAULT_TOP, thresholdMs }
 
 function tableHeader() {
   return (
-    padLeft('TOTAL(ms)', 10) +
+    padLeft('TOTAL', 10) +
+    ' ' +
+    padLeft('SELF', 10) +
     ' ' +
     padLeft('%', 6) +
     ' ' +
@@ -332,7 +394,9 @@ function profileRow(p, total) {
   const mean = p.calls > 0 ? p.totalMicros / p.calls : 0;
   const pct = total > 0 ? (p.totalMicros / total) * 100 : 0;
   return (
-    padLeft(ms(p.totalMicros), 10) +
+    padLeft(fmtTotal(p.totalMicros / MICROS_PER_MILLIS), 10) +
+    ' ' +
+    padLeft(fmtTotal(p.totalSelfMicros / MICROS_PER_MILLIS), 10) +
     ' ' +
     padLeft(pct.toFixed(1) + '%', 6) +
     ' ' +
@@ -361,7 +425,7 @@ function thresholdLine(profiles, thresholdMs) {
 }
 
 function countOver(profiles, thresholdMs) {
-  return profiles.filter((p) => p.totalMicros / 1000 > thresholdMs).length;
+  return profiles.filter((p) => p.totalMicros / MICROS_PER_MILLIS > thresholdMs).length;
 }
 
 function profileVerdict(profiles, thresholdMs, ctx) {
@@ -393,12 +457,13 @@ function reportJson(sorted) {
   return {
     generatedAt: new Date().toISOString(),
     totalMicros: totalMicros(sorted),
-    methods: sorted.map(({ method, file, line, calls, totalMicros, minMicros, maxMicros }) => ({
+    methods: sorted.map(({ method, file, line, calls, totalMicros, totalSelfMicros, minMicros, maxMicros }) => ({
       method,
       file,
       line,
       calls,
       totalMicros,
+      totalSelfMicros,
       minMicros,
       maxMicros,
     })),
@@ -409,8 +474,25 @@ function sortByTotal(profiles) {
   return [...profiles].sort((a, b) => b.totalMicros - a.totalMicros);
 }
 
+// Microseconds per millisecond — profile times are tracked in micros.
+const MICROS_PER_MILLIS = 1000;
+
 function ms(micros) {
-  return (micros / 1000).toFixed(2);
+  return (micros / MICROS_PER_MILLIS).toFixed(2);
+}
+
+// TOTAL/SELF with adaptive units (0.9.5): at extreme call counts (tens of
+// billions, e.g. a markdown hot loop) a plain toFixed(2) renders
+// `50000000.00` — a wall of digits that blows the column width up. Unit
+// suffixes keep the value compact at any magnitude.
+// Millis per second — fmtTotal's first tier boundary and its s-tier divisor.
+const MILLIS_PER_SECOND = 1000;
+
+function fmtTotal(millis) {
+  if (millis < MILLIS_PER_SECOND) return `${millis.toFixed(2)}ms`;
+  if (millis < 60000) return `${(millis / MILLIS_PER_SECOND).toFixed(2)}s`;
+  if (millis < 3600000) return `${(millis / 60000).toFixed(2)}m`;
+  return `${(millis / 3600000).toFixed(2)}h`;
 }
 
 function requireValue(argv, i, flag) {

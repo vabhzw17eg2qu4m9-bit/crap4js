@@ -218,14 +218,20 @@ How it works (port of crap4dart 0.4.0 / 0.9.x fixes):
    resolution walks up to the real dependencies) with `package.json`, `src/`,
    `test/`, and every analyzed source file instrumented in place.
 2. Instrumentation wraps every function body — located with the same
-   extraction rules as `analyze` — in `performance.now()` + `try/finally`,
-   calling `globalThis.__crap_record("<relFile>|<method>", start)`.
+   extraction rules as `analyze` — in `__crap_enter(key)` on entry plus a
+   `try/finally` calling `__crap_exit(key)` on exit.
 3. A collector module is preloaded into every node process via
-   `NODE_OPTIONS --import`; it aggregates (calls, totalMicros, minMicros,
-   maxMicros) per method, flushes every 5 records, and merges into
+   `NODE_OPTIONS --import`; it keeps a call stack of open calls (one frame
+   per `enter`, holding the start time and the nested-call time accrued so
+   far), aggregates per method (calls, totalMicros, totalSelfMicros,
+   minMicros, maxMicros), flushes every 5 calls, and merges into
    `CRAP_PROFILE_OUTPUT` with atomic writes (per-pid temp file + rename),
    so parallel test processes aggregate safely; the merge read retries
-   once around a concurrent rename (0.9.2).
+   once around a concurrent rename (0.9.2). Flushes merge only the DELTA
+   since the last successful flush — in-memory snapshots advance only
+   after the write succeeds — so repeated flushes never re-add cumulative
+   counters (0.9.5 fix: merging cumulative values inflated calls/total
+   quadratically on hot paths).
 4. `node --test` runs in the temp copy; timings are attributed to the
    analyzer's method inventory by `"<relFile>|<methodName>"` key — unmatched
    entries are ignored. The temp directory is removed afterwards (kept when
@@ -234,14 +240,28 @@ How it works (port of crap4dart 0.4.0 / 0.9.x fixes):
 Console table, sorted by TOTAL descending, limited to top N:
 
 ```
-Profile Report (N methods, total T.TTms)
-TOTAL(ms)      %  CALLS   MEAN(µs)   MAX(µs)  @60fps(ms) METHOD                         FILE:LINE
---------------------------------------------------------------------------------------------------
-    18.23  20.8%     31      588.0      4200       35.28 walkForEntries                 src/complexity.js:164
+Profile Report (2 methods, total 11.44ms)
+     TOTAL       SELF      %  CALLS   MEAN(µs)   MAX(µs)  @60fps(ms) METHOD                         FILE:LINE
+-------------------------------------------------------------------------------------------------------------
+   11.04ms    10.68ms  96.6%      1    11044.0     11044      662.64 slow                           src/add.js:4
+    0.39ms     0.39ms   3.4%   1001       ~0.4       316        0.02 add                            src/add.js:1
 ```
 
-- `%` — share of total profiled time; `@60fps(ms)` — mean × 60 (cost if the
-  function ran every frame at 60fps).
+- TOTAL — inclusive wall time across all calls; SELF — TOTAL minus the
+  time of nested instrumented calls that completed while the call was open
+  (flamegraph self-time semantics — ranks hot code by actual CPU burn, not
+  by how many callers fan out through it); `%` — share of total profiled
+  time; `@60fps(ms)` — mean × 60 (cost if the function ran every frame at
+  60fps).
+- TOTAL, SELF, and the summary-line total render with adaptive units —
+  `<1000` → `82.50ms`, `<60s` → `13.89s`, `<60m` → `22.50m`, else `13.89h`
+  (always 2 decimals) — so extreme call counts keep the columns compact
+  (0.9.5; a plain `50000000.00` blew the column width up).
+- The collector's call stack is a single global stack, exactly like
+  upstream Dart: on the single-threaded event loop this means an async
+  function's TOTAL includes awaits, and SELF follows event-loop nesting,
+  not async causality.
+
 - MEAN values marked `~` are sub-30µs — the instrumentation wrapper costs
   on the order of a microsecond, so those means are mostly profiler noise;
   read the CALLS/TOTAL deltas for such methods instead (0.9.2).
@@ -450,6 +470,14 @@ loose-file sprawl`. Takes no arguments — any argument is a usage error
   the bare analyze on staged files, where a full test suite per commit
   is unacceptable).
 - pixel-detector tuning commits — same Flutter-goldens-only area.
+- 0.9.5 icon/PNG branding assets (commit b789739) — upstream branding
+  only; no JS counterpart.
+- 0.9.5 public `flush()` + flush-on-outermost-method-exit —
+  Dart/flutter_test-specific (flutter_test fails on pending timers, so
+  upstream cannot keep a timer alive and flushes when the outermost call
+  returns instead). Node has no such restriction: the JS collector flushes
+  at `process.on('exit')`, which covers the same short-run tail-loss risk.
+  Ported instead: the 0.9.5 delta-flush fix itself.
 
 ## skill
 
