@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.6.2...v0.7.0) (2026-09-03)
+
+
+### Features
+
+* port crap4dart 0.9.5 (delta flush, SELF column, adaptive time units) ([#24](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/24)) ([a32c09a](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/a32c09a14fea4e59578274ca6d4be42a28ab908e))
+
 ## [0.6.2](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.6.1...v0.6.2) (2026-08-21)
 
 
