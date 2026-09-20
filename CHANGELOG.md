@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.7.0...v0.8.0) (2026-09-20)
+
+
+### Features
+
+* port crap4dart duplication gate and profile 0.9.5 ([#29](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/29)) ([bbf6bba](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/bbf6bba47ddcdb5680365a9636e7a076635f1180))
+
 ## [0.7.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.6.2...v0.7.0) (2026-09-03)
 
 
