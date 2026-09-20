@@ -10,7 +10,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { gateFiles, toRelPath } from './files.js';
-import { runCheck } from './gateCommon.js';
+import { applyGateArg, runCheck } from './gateCommon.js';
 import { parseSource } from './complexity.js';
 import { collectImports, resolveImport } from './imports.js';
 
@@ -28,7 +28,7 @@ const RULE_FLAGS = { '--from': 'from', '--forbid': 'forbid', '--message': 'messa
 export function parseRules(argv) {
   const opts = { from: [], forbid: [], message: [], paths: [] };
   for (let i = 0; i < argv.length; i++) {
-    i = applyRuleArg(opts, argv[i], argv, i);
+    i = applyGateArg(opts, argv[i], argv, i, RULE_FLAGS);
   }
   validateCounts(opts);
   opts.rules = opts.from.map((from, i) => ({
@@ -37,24 +37,6 @@ export function parseRules(argv) {
     message: opts.message[i] ?? null,
   }));
   return opts;
-}
-
-// Applies one argv token: a --from/--forbid/--message flag consumes a
-// value (inline `--flag=v` or the next token); anything else is a path.
-// Returns the index of the last consumed token.
-function applyRuleArg(opts, arg, argv, i) {
-  const eq = arg.indexOf('=');
-  const head = eq === -1 ? arg : arg.slice(0, eq);
-  const key = RULE_FLAGS[head];
-  if (!key) {
-    if (eq !== -1) throw new Error(`unknown flag: ${head}`);
-    opts.paths.push(arg);
-    return i;
-  }
-  const value = eq === -1 ? argv[i + 1] : arg.slice(eq + 1);
-  if (value === undefined) throw new Error(`${head} requires a value`);
-  opts[key].push(value);
-  return eq === -1 ? i + 1 : i;
 }
 
 function validateCounts({ from, forbid, message }) {

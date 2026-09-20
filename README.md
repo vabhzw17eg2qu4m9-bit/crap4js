@@ -64,6 +64,10 @@ crap4js banned-imports [--from GLOB --forbid GLOB --message MSG]... [paths...]
 crap4js magic-constants [paths...]
                          Flag hex colors outside constants and literals
                          repeated 3+ times in one file.
+crap4js duplicates [--threshold N] [--min-tokens N] [--min-lines N]
+                   [--exclude GLOB]... [--source PATH]... [paths...]
+                   Flag files whose duplicated lines exceed the threshold
+                   (token windows within/across files).
 crap4js test-assertions [paths...]
                          Flag test()/it() bodies with zero assertion calls.
 crap4js folder-structure Flag src/ directories with loose direct files.
@@ -75,7 +79,7 @@ usage error.
 
 The gate-check subcommands (`file-naming`, `nesting`, `class-size`,
 `weight-of-class`, `unused-code`, `unused-files`, `banned-imports`,
-`magic-constants`, `test-assertions`, `folder-structure`) are ports of
+`magic-constants`, `duplicates`, `test-assertions`, `folder-structure`) are ports of
 crap4dart gates. crap4js has no gate framework or config
 file, so each gate is a subcommand with its default thresholds and the
 shared exit-code contract: `0` pass/skip, `1` usage error, `2` violations.
@@ -270,6 +274,31 @@ are skipped; plain no-interpolation templates count as strings. Defaults
 are baked in (min_duplicates=3, min_length=4, hex rule on) — crap4js has
 no config. Any `--flag` argument is a usage error (exit 1). Exit 2 iff
 violations exist.
+
+## `duplicates`
+
+`crap4js duplicates [--threshold N] [--min-tokens N] [--min-lines N]
+[--exclude GLOB]... [--source PATH]... [paths...]` (port of crap4dart's
+duplication gate, 0.9.x, including its per-gate `sources` union) detects
+exact copy-paste duplicates. Every scanned file is tokenized (comments
+skipped, raw lexemes kept) and every window of `--min-tokens` tokens
+(default 50) spanning at least `--min-lines` source lines (default 5) is
+indexed; any window appearing twice or more — within or across files —
+marks its tokens duplicated. A file violates when its distinct duplicated
+lines exceed `--threshold` percent (default 1) of its lines; the reported
+line is the first duplicated one. Because windows straddle statement
+boundaries, the lines adjacent to a duplicated block are usually marked
+too.
+
+The scan set is the standard gate selection (explicit paths or the
+`src/` walk — test files and test directories always excluded) unioned
+with every `--source` path: files with a source extension are taken
+directly, directories are scanned recursively, missing paths are skipped
+silently. That is what makes cross-module duplication visible without
+widening the CRAP analysis scope. `--exclude` globs (same
+`*`/`**`/`?` semantics as banned-imports) drop matching project-relative
+paths from the union. Files with fewer than `--min-tokens` tokens are
+skipped from the scan. Exit 2 iff violations exist.
 
 ## `test-assertions`
 

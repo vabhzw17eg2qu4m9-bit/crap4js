@@ -16,6 +16,7 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -33,12 +34,13 @@ const DEFAULT_TOP = 20;
 
 // Source of the collector preload written into the temp copy and injected
 // into every node process via NODE_OPTIONS `--import`. It installs
-// globalThis.__crap_enter/__crap_exit and merges per-method stats into the
-// output file (temp file + rename) on every flush, so parallel test
-// processes aggregate without races — `node --test` runs each test file in
-// its own process.
+// globalThis.__crap_enter/__crap_exit and writes the process's cumulative
+// stats to `<CRAP_PROFILE_OUTPUT>.<pid>.json` (temp file + rename) on
+// every flush. Each `node --test` child owns its file exclusively — no
+// cross-process read-modify-write to race on, so parallel children
+// aggregate by file, never over each other.
 const COLLECTOR_SOURCE = `
-import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { renameSync, writeFileSync } from 'node:fs';
 
 const stats = new Map();
 const stack = [];
@@ -85,74 +87,24 @@ function newStats() {
     totalSelfMicros: 0,
     minMicros: Infinity,
     maxMicros: 0,
-    // Last values already merged into the output file. Flushes merge only
-    // the DELTA since the last successful flush — merging the cumulative
-    // values instead re-adds them on every flush, inflating counters
-    // quadratically (0.9.5 fix: a hot loop reported tens of billions of
-    // calls).
-    flushedCalls: 0,
-    flushedTotalMicros: 0,
-    flushedTotalSelfMicros: 0,
   };
 }
 
+// Each process rewrites its own file with the full cumulative snapshot —
+// trivially exact across repeated flushes (the delta bookkeeping the
+// shared-file design needed is gone), and the rename keeps concurrent
+// readers on either the old or the new file, never a torn one.
 function flush() {
-  const out = process.env.CRAP_PROFILE_OUTPUT;
-  if (!out || stats.size === 0) return;
-  const merged = readMerged(out);
-  for (const [key, s] of stats) mergeEntry(merged, key, s);
-  const tmp = out + '.' + process.pid + '.tmp';
+  const prefix = process.env.CRAP_PROFILE_OUTPUT;
+  if (!prefix || stats.size === 0) return;
+  const out = prefix + '.' + process.pid + '.json';
+  const tmp = out + '.tmp';
   try {
-    writeFileSync(tmp, JSON.stringify(merged));
+    writeFileSync(tmp, JSON.stringify(Object.fromEntries(stats)));
     renameSync(tmp, out);
-    // Snapshots advance only after a successful write — a failed flush
-    // retries the same delta next time (at-least-once).
-    for (const s of stats.values()) {
-      s.flushedCalls = s.calls;
-      s.flushedTotalMicros = s.totalMicros;
-      s.flushedTotalSelfMicros = s.totalSelfMicros;
-    }
   } catch {
     // Best effort — a lost flush only loses timing precision.
   }
-}
-
-function readMerged(out) {
-  // Retries once: a concurrent rename can land between existsSync and
-  // readFileSync (0.9.2). The temp name carries the pid, so parallel
-  // workers never flush through the same temp file.
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      return existsSync(out) ? JSON.parse(readFileSync(out, 'utf8')) : {};
-    } catch {
-      // fall through and retry
-    }
-  }
-  return {}; // corrupt or lost mid-rename file — start fresh
-}
-
-function mergeEntry(merged, key, s) {
-  // Only the delta since the last successful flush is added — the
-  // cumulative values were already written by previous flushes (0.9.5).
-  const deltaCalls = s.calls - s.flushedCalls;
-  const deltaTotal = s.totalMicros - s.flushedTotalMicros;
-  const deltaSelf = s.totalSelfMicros - s.flushedTotalSelfMicros;
-  const ex = merged[key];
-  if (!ex) {
-    merged[key] = {
-      calls: deltaCalls,
-      totalMicros: deltaTotal,
-      totalSelfMicros: deltaSelf,
-      minMicros: s.minMicros,
-      maxMicros: s.maxMicros,
-    };
-    return;
-  }
-  ex.calls += deltaCalls;
-  ex.totalMicros += deltaTotal;
-  ex.totalSelfMicros += deltaSelf;
-  ex.minMicros = Math.min(ex.minMicros, s.minMicros);
-  ex.maxMicros = Math.max(ex.maxMicros, s.maxMicros);
 }
 `;
 
@@ -202,13 +154,13 @@ export function runProfile(opts, ctx) {
 function runInstrumentedTests(files, opts, ctx) {
   const tempDir = path.join(ctx.cwd, TEMP_DIR);
   prepareTempCopy(files, tempDir, ctx.cwd);
-  const outputFile = path.join(tempDir, '.crap_profile.json');
+  const outputPrefix = path.join(tempDir, '.crap_profile');
   ctx.err.write('Running instrumented tests...\n');
   const result = spawnSync(process.execPath, testArgs(opts, ctx.cwd, tempDir), {
     cwd: tempDir,
-    env: testEnv(tempDir, outputFile),
+    env: testEnv(tempDir, outputPrefix),
   });
-  const timings = readTimings(outputFile);
+  const timings = readTimings(outputPrefix);
   cleanupTemp(tempDir);
   reportTestFailure(result, ctx);
   if (!timings) ctx.err.write('No profiling data was produced.\n');
@@ -232,7 +184,7 @@ function remapPath(p, root, tempDir) {
   return rel.startsWith('..') ? p : path.join(tempDir, rel);
 }
 
-function testEnv(tempDir, outputFile) {
+function testEnv(tempDir, outputPrefix) {
   const preload = pathToFileURL(path.join(tempDir, PRELOAD_NAME)).href;
   const nodeOptions = [`--import ${preload}`, process.env.NODE_OPTIONS]
     .filter(Boolean)
@@ -242,7 +194,7 @@ function testEnv(tempDir, outputFile) {
   const { NODE_TEST_CONTEXT, ...env } = process.env;
   return {
     ...env,
-    CRAP_PROFILE_OUTPUT: outputFile,
+    CRAP_PROFILE_OUTPUT: outputPrefix,
     NODE_OPTIONS: nodeOptions,
   };
 }
@@ -304,12 +256,53 @@ function reportTestFailure(result, ctx) {
   }
 }
 
-function readTimings(outputFile) {
-  if (!existsSync(outputFile)) return null;
+// Reads every per-pid collector output file (`<prefix>.<pid>.json`) and
+// merges them into one timings object: counters sum, min/max reduce. Each
+// `node --test` child owns its file exclusively, so near-simultaneous
+// children can never lose each other's records — the earlier single
+// shared output file dropped them when two children both read the same
+// base and each renamed its own merge over the other (0.9.3 e2e flake).
+function readTimings(outputPrefix) {
+  const dir = path.dirname(outputPrefix);
+  let names;
   try {
-    return JSON.parse(readFileSync(outputFile, 'utf8'));
+    names = readdirSync(dir);
   } catch {
     return null;
+  }
+  const base = path.basename(outputPrefix);
+  const files = names.filter((n) => isPidOutput(n, base));
+  if (files.length === 0) return null;
+  const merged = {};
+  for (const name of files) mergeTimingFile(merged, path.join(dir, name));
+  return Object.keys(merged).length > 0 ? merged : null;
+}
+
+// `.json.tmp` staging files from a crashed child end in `.tmp` and never
+// match; rename-atomic files always parse — the guard is process-boundary
+// insurance only.
+function isPidOutput(name, base) {
+  return name.startsWith(base + '.') && name.endsWith('.json');
+}
+
+function mergeTimingFile(merged, file) {
+  let data;
+  try {
+    data = JSON.parse(readFileSync(file, 'utf8'));
+  } catch {
+    return;
+  }
+  for (const [key, s] of Object.entries(data)) {
+    const ex = merged[key];
+    if (!ex) {
+      merged[key] = { ...s };
+      continue;
+    }
+    ex.calls += s.calls;
+    ex.totalMicros += s.totalMicros;
+    ex.totalSelfMicros += s.totalSelfMicros;
+    ex.minMicros = Math.min(ex.minMicros, s.minMicros);
+    ex.maxMicros = Math.max(ex.maxMicros, s.maxMicros);
   }
 }
 

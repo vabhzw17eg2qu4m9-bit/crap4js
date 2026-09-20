@@ -19,6 +19,43 @@ export function skipPartialSelection(ctx) {
 }
 
 /**
+ * Shared repeatable-flag argv walker for the gate subcommands: value flags
+ * come as `--flag VALUE` or `--flag=VALUE` (`valueFlags` maps flag → opts
+ * key); number flags (`numberFlags`) are validated and stored as scalars,
+ * every other flag accumulates values into an array; any non-flag token is
+ * collected into `opts.paths`. Returns the index of the last consumed argv
+ * token.
+ */
+export function applyGateArg(opts, arg, argv, i, valueFlags, numberFlags = null) {
+  const eq = arg.indexOf('=');
+  const head = eq === -1 ? arg : arg.slice(0, eq);
+  const key = valueFlags[head];
+  if (!key) {
+    if (eq !== -1) throw new Error(`unknown flag: ${head}`);
+    opts.paths.push(arg);
+    return i;
+  }
+  const value = eq === -1 ? argv[i + 1] : arg.slice(eq + 1);
+  return applyGateValue(opts, key, head, value, eq === -1 ? i + 1 : i, numberFlags);
+}
+
+// Stores one flag value: number flags are validated scalars, every other
+// flag accumulates into an array (all gate flags are repeatable).
+function applyGateValue(opts, key, head, value, ret, numberFlags) {
+  if (value === undefined) throw new Error(`${head} requires a value`);
+  opts[key] = numberFlags?.has(head)
+    ? toGateNumber(head, value)
+    : [...(opts[key] ?? []), value];
+  return ret;
+}
+
+function toGateNumber(head, value) {
+  const n = Number(value);
+  if (Number.isNaN(n) || n < 0) throw new Error(`Invalid ${head}: ${value}`);
+  return n;
+}
+
+/**
  * The common command body of every gate-check subcommand: run
  * `findViolations(files, projectRoot)`, print `file[:line]: message` per
  * violation plus one summary line, and return the exit code.
