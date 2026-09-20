@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { spawnSync } from 'node:child_process';
+import { once } from 'node:events';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { extractMethods } from '../src/complexity.js';
@@ -22,6 +23,30 @@ function runCli(cwd, args) {
     encoding: 'utf8',
     env: { ...process.env },
   });
+}
+
+// Reads a collector output PREFIX the way the parent does: every
+// <prefix>.<pid>.json merged (counters sum, min/max reduce).
+function readTimings(prefix) {
+  const merged = {};
+  const dir = path.dirname(prefix);
+  for (const name of readdirSync(dir)) {
+    if (!name.startsWith(path.basename(prefix) + '.') || !name.endsWith('.json')) continue;
+    const data = JSON.parse(readFileSync(path.join(dir, name), 'utf8'));
+    for (const [key, s] of Object.entries(data)) {
+      const ex = merged[key];
+      if (!ex) {
+        merged[key] = { ...s };
+        continue;
+      }
+      ex.calls += s.calls;
+      ex.totalMicros += s.totalMicros;
+      ex.totalSelfMicros += s.totalSelfMicros;
+      ex.minMicros = Math.min(ex.minMicros, s.minMicros);
+      ex.maxMicros = Math.max(ex.maxMicros, s.maxMicros);
+    }
+  }
+  return merged;
 }
 
 test('instrumentSource wraps function bodies in enter + try/finally-exit', () => {
@@ -62,7 +87,7 @@ test('collector aggregates calls/min/max and merges across processes', () => {
   const root = mkdtempSync(path.join(tmpdir(), 'crap4js-collector-'));
   try {
     const preload = path.join(root, 'preload.mjs');
-    const output = path.join(root, 'out.json');
+    const output = path.join(root, 'out'); // CRAP_PROFILE_OUTPUT is a prefix; files are <prefix>.<pid>.json
     writeFileSync(preload, COLLECTOR_SOURCE);
     writeFileSync(
       path.join(root, 'driver.mjs'),
@@ -89,8 +114,9 @@ test('collector aggregates calls/min/max and merges across processes', () => {
       });
     assert.equal(run(path.join(root, 'driver.mjs')).status, 0);
     assert.equal(run(path.join(root, 'driver.mjs')).status, 0);
-    const data = JSON.parse(readFileSync(output, 'utf8'));
-    assert.equal(data['src/a.js|f'].calls, 4); // 2 runs x 2 calls, merged
+    const data = readTimings(output);
+    assert.equal(data['src/a.js|f'].calls, 4); // 2 runs x 2 calls, merged across pid files
+    assert.equal(readdirSync(root).filter((n) => /^out\.\d+\.json$/.test(n)).length, 2);
     assert.ok(data['src/a.js|f'].totalMicros >= 4 * 400);
     assert.ok(data['src/a.js|f'].minMicros <= data['src/a.js|f'].maxMicros);
     assert.ok(data['src/a.js|f'].totalSelfMicros <= data['src/a.js|f'].totalMicros);
@@ -100,15 +126,14 @@ test('collector aggregates calls/min/max and merges across processes', () => {
   }
 });
 
-// Regression for crap4dart 0.9.5: the collector used to merge its CUMULATIVE
-// in-memory counters into the output file on every flush (every 5 calls) and
-// again at exit, inflating calls/total quadratically — 43 real calls merged
-// as 5+10+...+40 = 180+ with impossible TOTALs.
-test('collector flushes deltas only — counters stay exact across flushes (0.9.5)', () => {
+// Each collector process owns its output file and rewrites it with the full
+// cumulative snapshot on every flush (every 5 calls) and at exit — exact
+// across any number of flushes (the 0.9.5 no-inflation contract).
+test('collector keeps counters exact across repeated flushes (0.9.5)', () => {
   const root = mkdtempSync(path.join(tmpdir(), 'crap4js-collector-flush-'));
   try {
     const preload = path.join(root, 'preload.mjs');
-    const output = path.join(root, 'out.json');
+    const output = path.join(root, 'out');
     writeFileSync(preload, COLLECTOR_SOURCE);
     writeFileSync(
       path.join(root, 'driver.mjs'),
@@ -128,8 +153,8 @@ test('collector flushes deltas only — counters stay exact across flushes (0.9.
       },
     });
     assert.equal(run.status, 0, run.stderr);
-    const data = JSON.parse(readFileSync(output, 'utf8'));
-    assert.equal(data['src/a.js|f'].calls, 43); // 8 auto-flushes + exit flush, deltas only
+    const data = readTimings(output);
+    assert.equal(data['src/a.js|f'].calls, 43); // 8 auto-flushes + exit flush, cumulative snapshots
     assert.ok(data['src/a.js|f'].totalMicros < 10000);
     assert.equal(data['src/a.js|f'].totalSelfMicros, data['src/a.js|f'].totalMicros);
   } finally {
@@ -141,7 +166,7 @@ test('collector self time excludes nested call time (0.9.5)', () => {
   const root = mkdtempSync(path.join(tmpdir(), 'crap4js-collector-self-'));
   try {
     const preload = path.join(root, 'preload.mjs');
-    const output = path.join(root, 'out.json');
+    const output = path.join(root, 'out');
     writeFileSync(preload, COLLECTOR_SOURCE);
     writeFileSync(
       path.join(root, 'driver.mjs'),
@@ -164,7 +189,7 @@ test('collector self time excludes nested call time (0.9.5)', () => {
       },
     });
     assert.equal(run.status, 0, run.stderr);
-    const data = JSON.parse(readFileSync(output, 'utf8'));
+    const data = readTimings(output);
     const outer = data['src/a.js|outer'];
     const inner = data['src/b.js|inner'];
     assert.equal(outer.calls, 1);
@@ -181,6 +206,42 @@ test('collector self time excludes nested call time (0.9.5)', () => {
   }
 });
 
+
+// Regression (0.9.3 e2e flake): with the earlier single shared output
+// file, two node --test children finishing near-simultaneously both read
+// the same base and each renamed its own merge over the other — losing
+// one child's records. Per-pid output files make the outcome
+// deterministic: each child exclusively owns <prefix>.<pid>.json.
+test('concurrent collectors each own their output file — no lost updates', async () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'crap4js-collector-race-'));
+  try {
+    const preload = path.join(root, 'preload.mjs');
+    const output = path.join(root, 'out');
+    writeFileSync(preload, COLLECTOR_SOURCE);
+    const driver = (key, ms) =>
+      [
+        'const busy = (end) => { while (performance.now() < end); };',
+        `globalThis.__crap_enter('${key}');`,
+        `busy(performance.now() + ${ms});`,
+        `globalThis.__crap_exit('${key}');`,
+      ].join('\n');
+    writeFileSync(path.join(root, 'a.mjs'), driver('src/a.js|f', 60));
+    writeFileSync(path.join(root, 'b.mjs'), driver('src/b.js|g', 60));
+    const env = {
+      ...process.env,
+      CRAP_PROFILE_OUTPUT: output,
+      NODE_OPTIONS: `--import ${pathToFileURL(preload).href}`,
+    };
+    const a = spawn(process.execPath, [path.join(root, 'a.mjs')], { cwd: root, env });
+    const b = spawn(process.execPath, [path.join(root, 'b.mjs')], { cwd: root, env });
+    await Promise.all([once(a, 'exit'), once(b, 'exit')]);
+    const data = readTimings(output);
+    assert.equal(data['src/a.js|f'].calls, 1);
+    assert.equal(data['src/b.js|g'].calls, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 test('formatProfileReport sorts by TOTAL, limits top, formats threshold line', () => {
   const profiles = [
     { method: 'fast', file: 'src/a.js', line: 1, calls: 10, totalMicros: 100, minMicros: 5, maxMicros: 20 },

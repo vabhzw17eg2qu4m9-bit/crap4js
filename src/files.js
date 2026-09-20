@@ -161,8 +161,12 @@ export function gateFiles(paths, projectRoot) {
   return files.filter((f) => !isTestPath(f));
 }
 
-// True for real files with a source extension — test files included.
-function isAnySourceFile(p, st) {
+/**
+ * True for real files with a source extension — test files included.
+ * Used by the duplicates gate's `--source` expansion, which takes any
+ * source-extension file the user points at (upstream takes any .dart).
+ */
+export function isAnySourceFile(p, st) {
   return st?.isFile() && SOURCE_EXTS.has(path.extname(p));
 }
 

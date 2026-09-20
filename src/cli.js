@@ -21,6 +21,10 @@
 //   crap4js magic-constants [paths...]
 //                            Flag hex colors outside constants and literals
 //                            repeated 3+ times per file.
+//   crap4js duplicates [--threshold N] [--min-tokens N] [--min-lines N]
+//                      [--exclude GLOB]... [--source PATH]... [paths...]
+//                            Flag files whose duplicated lines exceed the
+//                            threshold (token windows within/across files).
 //   crap4js test-assertions [paths...]
 //                            Flag test() bodies with zero assertion calls.
 //   crap4js folder-structure Flag src/ dirs with loose (direct) files.
@@ -28,7 +32,7 @@
 //
 // The first argument selects a subcommand when it is exactly `profile`,
 // `file-naming`, `nesting`, `class-size`, `weight-of-class`, `unused-code`,
-// `unused-files`, `banned-imports`, `magic-constants`,
+// `unused-files`, `banned-imports`, `magic-constants`, `duplicates`,
 // `test-assertions`, `folder-structure`, or `skill`;
 // anything else is analyzed as before.
 //
@@ -48,6 +52,7 @@ import { runUnusedCode } from './unusedCode.js';
 import { runUnusedFiles } from './unusedFiles.js';
 import { runBannedImports } from './bannedImports.js';
 import { runMagicConstants } from './magicConstants.js';
+import { runDuplicates } from './duplicates.js';
 import { runTestAssertions } from './testAssertions.js';
 import { runFolderStructure } from './folderStructure.js';
 import { parseProfileArgs, runProfile } from './profile.js';
@@ -84,7 +89,11 @@ function usage() {
     '                           Enforce architectural import boundaries',
     '  crap4js magic-constants [paths...]',
     '                           Flag hex colors outside constants and literals',
-    '                           repeated 3+ times in one file',
+    '                           repeated 3+ times per file.',
+    '  crap4js duplicates [--threshold N] [--min-tokens N] [--min-lines N]',
+    '                     [--exclude GLOB]... [--source PATH]... [paths...]',
+    '                           Flag files whose duplicated lines exceed the',
+    '                           threshold (token windows within/across files)',
     '  crap4js test-assertions [paths...]',
     '                           Flag test()/it() bodies with zero assertion calls',
     '  crap4js folder-structure',
@@ -106,6 +115,7 @@ const SUBCOMMANDS = {
   'unused-files': (args, ctx) => runUnusedFiles(args, ctx),
   'banned-imports': (args, ctx) => runBannedImports(args, ctx),
   'magic-constants': (args, ctx) => runMagicConstants(args, ctx),
+  duplicates: (args, ctx) => runDuplicates(args, ctx),
   'test-assertions': (args, ctx) => runTestAssertions(args, ctx),
   'folder-structure': (args, ctx) => runFolderStructure(args, ctx),
   skill: (_args, ctx) => runSkill(ctx),

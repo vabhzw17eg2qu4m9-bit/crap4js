@@ -89,6 +89,18 @@ function parseMethods(source, ext) {
   return methods;
 }
 
+function parseWith(source, ext, tokens) {
+  const plugins = TS_EXTS.has(ext) ? TS_PLUGINS : FLOW_PLUGINS;
+  return parse(source, {
+    sourceType: 'module',
+    allowImportExportEverywhere: true,
+    allowReturnOutsideFunction: true,
+    errorRecovery: true,
+    plugins,
+    tokens,
+  });
+}
+
 /**
  * Parse source with the port's standard plugin routing. Shared by the
  * gate-check subcommands so every check sees the same AST.
@@ -97,14 +109,29 @@ function parseMethods(source, ext) {
  * @param {string} [ext]  File extension routing flow vs typescript plugins.
  */
 export function parseSource(source, ext) {
-  const plugins = TS_EXTS.has(ext) ? TS_PLUGINS : FLOW_PLUGINS;
-  return parse(source, {
-    sourceType: 'module',
-    allowImportExportEverywhere: true,
-    allowReturnOutsideFunction: true,
-    errorRecovery: true,
-    plugins,
-  });
+  return parseWith(source, ext, false);
+}
+
+// @babel/parser emits comments inside the token stream (tokens: true) as
+// bare strings (`CommentLine`/`CommentBlock`), while real tokens carry a
+// type object — skipped like upstream skips its CommentToken nodes.
+function isCommentToken(t) {
+  return typeof t.type === 'string';
+}
+/**
+ * Tokenize source with the port's standard plugin routing: every token's
+ * raw lexeme plus its start line, comments and the EOF sentinel skipped.
+ * Shared by the duplicates gate, which scans lexeme windows.
+ *
+ * @param {string} source
+ * @param {string} [ext]  File extension routing flow vs typescript plugins.
+ * @returns {Array<{value: string, line: number}>}
+ */
+export function tokenizeSource(source, ext) {
+  const ast = parseWith(source, ext, true);
+  return ast.tokens
+    .filter((t) => t.type.label !== 'eof' && !isCommentToken(t))
+    .map((t) => ({ value: source.slice(t.start, t.end), line: t.loc.start.line }));
 }
 
 // Sentinel: a handler returns this when it has already descended into the

@@ -53,6 +53,10 @@ crap4js banned-imports [--from GLOB --forbid GLOB --message MSG]... [paths...]
 crap4js magic-constants [paths...]
                          Flag hex colors outside constants and literals
                          repeated 3+ times in one file.
+crap4js duplicates [--threshold N] [--min-tokens N] [--min-lines N]
+                   [--exclude GLOB]... [--source PATH]... [paths...]
+                   Flag files whose duplicated lines exceed the threshold
+                   (token windows within/across files).
 crap4js test-assertions [paths...]
                          Flag test()/it() bodies with zero assertion calls.
 crap4js folder-structure
@@ -62,7 +66,7 @@ crap4js skill            Print the crap4js profiling skill for AI agents.
 
 The first argument selects a subcommand when it is exactly `profile`,
 `file-naming`, `nesting`, `class-size`, `weight-of-class`, `unused-code`,
-`unused-files`, `banned-imports`, `magic-constants`, `test-assertions`,
+`unused-files`, `banned-imports`, `magic-constants`, `duplicates`, `test-assertions`,
 `folder-structure`, or `skill`; anything else (flags, paths)
 is analyzed as the CRAP command above. `--changed` is mutually exclusive
 with explicit paths. Unknown flags are a usage error (exit 1).
@@ -183,7 +187,7 @@ threshold; otherwise `passed`.
 |------|-----------------------------------------------------------------------------|
 | `0`  | Success (including empty selection, or max numeric CRAP ≤ threshold).       |
 | `1`  | CLI usage error (bad flag, bad threshold, `--changed` + paths, unreadable, banned-imports rule misuse). |
-| `2`  | CRAP threshold exceeded (`CRAP threshold exceeded: <max> > <threshold>` on stderr), profile threshold exceeded, or gate-subcommand violations (file-naming, nesting, class-size, weight-of-class, unused-code, unused-files, banned-imports, magic-constants, test-assertions, folder-structure). |
+| `2`  | CRAP threshold exceeded (`CRAP threshold exceeded: <max> > <threshold>` on stderr), profile threshold exceeded, or gate-subcommand violations (file-naming, nesting, class-size, weight-of-class, unused-code, unused-files, banned-imports, magic-constants, duplicates, test-assertions, folder-structure). |
 
 ## `--run-tests`
 
@@ -224,14 +228,20 @@ How it works (port of crap4dart 0.4.0 / 0.9.x fixes):
    `NODE_OPTIONS --import`; it keeps a call stack of open calls (one frame
    per `enter`, holding the start time and the nested-call time accrued so
    far), aggregates per method (calls, totalMicros, totalSelfMicros,
-   minMicros, maxMicros), flushes every 5 calls, and merges into
-   `CRAP_PROFILE_OUTPUT` with atomic writes (per-pid temp file + rename),
-   so parallel test processes aggregate safely; the merge read retries
-   once around a concurrent rename (0.9.2). Flushes merge only the DELTA
-   since the last successful flush — in-memory snapshots advance only
-   after the write succeeds — so repeated flushes never re-add cumulative
-   counters (0.9.5 fix: merging cumulative values inflated calls/total
-   quadratically on hot paths).
+   minMicros, maxMicros), and flushes every 5 calls plus at
+   `process.on('exit')`. `CRAP_PROFILE_OUTPUT` is a file-name PREFIX:
+   every process writes its own `<prefix>.<pid>.json` with its full
+   cumulative snapshot (temp file + rename), and the parent merges all
+   per-pid files afterwards (counters sum, min/max reduce). Each `node
+   --test` child is a separate process, and each exclusively owns its
+   file, so near-simultaneous children can never lose each other's
+   records — the earlier single shared output file dropped them when two
+   children both read the same base and each renamed its own merge over
+   the other (a real flake in the 0.9.3 explicit-path e2e scenario; the
+   0.9.2 retry-around-rename and the 0.9.5 delta-flush bookkeeping both
+   existed to patch that shared file and are gone with it: a process
+   rewriting its own cumulative snapshot is exact across any number of
+   flushes). Same design as the Go port's per-pid record files.
 4. `node --test` runs in the temp copy; timings are attributed to the
    analyzer's method inventory by `"<relFile>|<methodName>"` key — unmatched
    entries are ignored. The temp directory is removed afterwards (kept when
@@ -302,8 +312,9 @@ domain-meaningful names` otherwise. Exit 2 iff violations exist.
 `nesting`, `class-size`, `weight-of-class`, `unused-code`, `unused-files`,
 and `banned-imports` are ports of the crap4dart 0.5.x gates of the same
 names; `magic-constants` is a port of the crap4dart 0.6.x–0.9.x
-magic_constants gate; `test-assertions` and `folder-structure` are ports
-of the crap4dart 0.9.x test_assertions and folder_structure gates.
+magic_constants gate; `test-assertions`, `folder-structure`, and
+`duplicates` are ports of the crap4dart 0.9.x test_assertions,
+folder_structure, and duplication gates.
 crap4js has no gate framework and no config file, so each gate is
 a CLI subcommand with its built-in default thresholds; every gate accepts
 `[paths...]` (default: the normal source-selection rules, test files and
@@ -415,6 +426,53 @@ already the port's shape — rules are compiled once per run before the
 file loop. The 0.8.7 stable N/A-row ordering (tie-break by file:line)
 was already the port's sort contract.
 
+### duplicates
+
+Port of the crap4dart 0.9.x duplication gate (upstream spec §11.11)
+including the per-gate `sources` union (commit dc64e9c), with upstream
+defaults baked in (threshold=1, min_tokens=50, min_lines=5 — crap4js has
+no config):
+
+```
+crap4js duplicates [--threshold N] [--min-tokens N] [--min-lines N]
+                   [--exclude GLOB]... [--source PATH]... [paths...]
+```
+
+Each scanned file is tokenized with @babel/parser through the port's
+standard plugin routing (raw lexemes kept, one entry per start line).
+Comments are skipped — unlike the analyzer, @babel/parser emits comments
+inside its `tokens: true` stream (as bare-string token types), so they
+are filtered explicitly along with the EOF sentinel; upstream skips its
+CommentToken and synthetic tokens instead. A duplicated block is a token
+sequence appearing at least twice, at least `--min-tokens` tokens long
+and spanning at least `--min-lines` source lines. Detection indexes
+every valid window (first-to-last token line span ≥ min_lines) across
+all scanned files together, keyed by the joined window lexemes — a
+string-keyed sliding window where upstream hashes the same windows with
+Rabin-Karp: same windows, no collision handling — and marks every token
+of windows seen two or more times, so blocks duplicated within or across
+files are marked in every copy. A file violates when its distinct
+duplicated lines exceed `--threshold` percent of its total lines
+(upstream newline count: newline total, +1 for a trailing fragment); the
+violation line is the first duplicated line and the message is
+`X.XX% duplicated lines > T%`. Because windows straddle statement
+boundaries, a repeated block usually drags the preceding line's final
+`;` into the duplicated set — same as upstream.
+
+Scan set: the standard gate selection (explicit paths or the default
+`src/` walk) unioned with every `--source` path — files with a source
+extension taken directly, directories walked recursively, missing paths
+skipped silently (commit dc64e9c) — filtered by the port's standard
+test-file/test-directory exclusion (standing in for upstream's default
+`test/**` exclude glob) and by `--exclude` globs, matched against
+project-relative POSIX paths with the banned-imports `*`/`**`/`?`
+semantics. Upstream's default generated-file excludes (`**.g.dart`,
+`**.freezed.dart`, `**.mocks.dart`) have no JavaScript convention to
+map to and are not ported. Files with fewer than `--min-tokens` tokens
+are skipped from the scan; the summary counts only tokenized files —
+`N files, X.XX% duplicated lines` on pass, `M/N files over T%
+duplication` on fail. Exit 2 iff violations exist.
+
 ### test-assertions
 
 Port of the crap4dart 0.9.x test_assertions gate with min_assertions=1
@@ -477,7 +535,8 @@ loose-file sprawl`. Takes no arguments — any argument is a usage error
   upstream cannot keep a timer alive and flushes when the outermost call
   returns instead). Node has no such restriction: the JS collector flushes
   at `process.on('exit')`, which covers the same short-run tail-loss risk.
-  Ported instead: the 0.9.5 delta-flush fix itself.
+  Ported instead: the 0.9.5 no-inflation guarantee — via per-pid output
+  files (step 3 above) rather than upstream's delta-flush bookkeeping.
 
 ## skill
 
