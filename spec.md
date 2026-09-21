@@ -14,20 +14,20 @@ the sibling ports (`crap4java`, `crap4dart`, `crap4go`, `crap4py`).
 
 In scope:
 
-- Pure JavaScript (ES2020+), CommonJS (`.cjs`), and ESM (`.mjs`).
-- Cyclomatic complexity via `acorn` AST.
+- JavaScript (ES2020+), CommonJS (`.cjs`), ESM (`.mjs`), JSX, Flow and
+  TypeScript (`.ts`, `.tsx`).
+- Cyclomatic complexity via the `@babel/parser` AST.
 - Statement coverage via Istanbul / nyc JSON.
 - Class methods, top-level functions, assigned function/arrow expressions.
 
 Out of scope (v1, see *Non-Goals*):
 
-- TypeScript (`.ts`), JSX/TSX, flow typing.
 - Branch / function coverage attribution (only statement coverage).
 
 ## CLI
 
 ```
-crap4js                  Analyze all .js/.mjs/.cjs files under src/.
+crap4js                  Analyze all .js/.jsx/.ts/.tsx/.mjs/.cjs under src/.
 crap4js --changed        Analyze git-changed source files under src/.
 crap4js <path>...        Analyze explicit files / directories (expanded).
 crap4js --help           Print this help and exit 0.
@@ -73,8 +73,8 @@ with explicit paths. Unknown flags are a usage error (exit 1).
 
 ## File Selection
 
-- Default: walk `<projectRoot>/src/` for `.js`, `.mjs`, `.cjs`. `node_modules`
-  directories are skipped.
+- Default: walk `<projectRoot>/src/` for `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`
+  and `.cjs`. `node_modules` directories are skipped.
 - `--changed`: parse `git status --porcelain`; keep modified/added/untracked/
   renamed/copied entries (status letters in `{M, A, R, C, ?}`); skip deletions
   and unchanged lines. Rename `old -> new` is resolved to `new`. Result is
@@ -104,21 +104,31 @@ node --test`, crap4dart 0.8.7 hint), and every method is reported with
 
 ## JavaScript parsing
 
-`acorn.parse(source, { ecmaVersion: 'latest', sourceType: 'module', locations: true })`.
+`parse(source, { sourceType: 'module', allowImportExportEverywhere: true,
+allowReturnOutsideFunction: true, errorRecovery: true, plugins })`, where
+`plugins` routes on the file extension: `.ts`/`.tsx` select the `typescript`
+plugin and every other extension selects `flow`, since `@babel/parser`
+refuses to enable both at once. Both routes share the JSX, decorator and
+class-property plugins.
 
 Method entries are produced for:
 
 - `FunctionDeclaration` (named; `<anonymous>` for `export default function () {}`)
-- `MethodDefinition` inside a class body — named `ClassName.methodName`
-  (or just `methodName` for anonymous classes); `constructor` excluded.
+- `ClassMethod` / `ClassPrivateMethod` inside a class body — named
+  `ClassName.methodName` (or just `methodName` for anonymous classes);
+  `constructor` excluded.
 - `VariableDeclarator` whose initialiser is a `FunctionExpression` or
   `ArrowFunctionExpression` — named after the variable.
 - `AssignmentExpression` whose right-hand side is a function/arrow — named
   after the assignment target (e.g. `obj.method`).
-- Object-literal `Property` whose value is a function/arrow — named after
-  the key.
+- Object-literal `ObjectMethod` (shorthand) and `ObjectProperty` whose value
+  is a function/arrow — named after the key when that key is an identifier.
+  A computed key counts only when it is a bare identifier,
+  and is then read as written: `{ [name]() {} }` is reported as `name`, the
+  identifier's own text rather than its value. String and numeric literal
+  keys, and computed keys of any other shape, are `<anonymous>`.
 
-Line numbers come from acorn's `loc` (1-based `start.line` to `end.line`).
+Line numbers come from Babel's `loc` (1-based `start.line` to `end.line`).
 
 ## Cyclomatic complexity
 
@@ -546,8 +556,6 @@ the report) followed by one line on installing it as an agent skill. Exits 0.
 
 ## Non-Goals (v1)
 
-- TypeScript / TSX / JSX support (acorn's `ecmaVersion: 'latest'` will not
-  parse TS or JSX; parsing such a file errors out and is reported).
 - Branch / function / line-level coverage attribution (only statement
   coverage).
 - Configurable source roots (only `src/`).

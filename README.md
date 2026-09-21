@@ -9,7 +9,7 @@
 
 `crap4js` computes the CRAP score for every function/method in a JavaScript
 project by combining **cyclomatic complexity** (parsed from source via
-[`acorn`](https://github.com/acornjs/acorn)) with **statement coverage**
+[`@babel/parser`](https://github.com/babel/babel/tree/main/packages/babel-parser)) with **statement coverage**
 (parsed from an Istanbul/nyc `coverage-final.json`). It is a port of
 [`crap4java`](https://github.com/IstiN/crap4java) and a sibling of
 `crap4dart`. The CLI, formula, complexity rules, report format, and exit
@@ -40,12 +40,13 @@ npx crap4js
 > **Warning:** the `crap4js` package on npm is an unrelated third-party
 > project — install from GitHub as shown above.
 
-Runtime requirement: Node.js ≥ 20. The only runtime dependency is `acorn`.
+Runtime requirement: Node.js ≥ 20. The only runtime dependency is
+`@babel/parser`.
 
 ## CLI usage
 
 ```
-crap4js                  Analyze all .js/.mjs/.cjs files under src/.
+crap4js                  Analyze all .js/.jsx/.ts/.tsx/.mjs/.cjs under src/.
 crap4js --changed        Analyze git-changed source files under src/.
 crap4js <path>...        Analyze explicit files / directories (expanded).
 crap4js --help           Print this help and exit 0.
@@ -341,7 +342,7 @@ plus one line on installing it as an agent skill. Exits 0.
 
 Base value `1`, then `+1` for each occurrence of:
 
-| Construct                | acorn node type                              |
+| Construct                | Babel node type                              |
 |--------------------------|----------------------------------------------|
 | `if`                     | `IfStatement`                                |
 | `for`                    | `ForStatement`                               |
@@ -366,11 +367,15 @@ An entry is produced for every:
 - `FunctionDeclaration`
 - `FunctionExpression` / `ArrowFunctionExpression` assigned to a variable or
   object-literal property (named after the variable / property)
-- `MethodDefinition` inside a class body (named `ClassName.methodName`, or
-  just `methodName` when the class is anonymous)
+- `ClassMethod` / `ClassPrivateMethod` inside a class body (named
+  `ClassName.methodName`, or just `methodName` when the class is anonymous)
 - Object-literal method shorthand / `{ key: function () {} }`
 
-Truly anonymous function literals are reported as `<anonymous>`.
+Truly anonymous function literals are reported as `<anonymous>`, as are
+entries whose only name would come from a string or numeric object key.
+A computed key is used only when it is a bare identifier, and then it is
+read as written: `{ [name]() {} }` is reported as `name` rather than the
+value `name` holds, while `{ [obj.name]() {} }` is `<anonymous>`.
 
 ## Project layout
 
@@ -380,7 +385,7 @@ crap4js/
   src/
     cli.js         argv parsing, exit codes
     crapScore.js   formula
-    complexity.js  acorn-based complexity + method extraction
+    complexity.js  Babel-based complexity + method extraction
     coverage.js    Istanbul JSON parsing + per-method attribution
     analyzer.js    combine parse + coverage → MethodMetric[]
     report.js      tabular formatter
@@ -429,7 +434,7 @@ crap4js/
 ## Development
 
 ```bash
-npm install     # acorn only
+npm install     # @babel/parser, plus c8 for coverage
 npm test        # node --test
 ```
 
