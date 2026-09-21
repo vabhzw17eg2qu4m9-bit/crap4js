@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # crap4js pre-commit hook.
-# Runs the tool on staged JS/MJS/CJS files and blocks the commit when the
-# max CRAP exceeds the 8.0 threshold (tool exits 2). One-time enable:
+# Runs the tool on staged JS/JSX/TS/TSX/MJS/CJS files and blocks the commit
+# when the max CRAP exceeds the 8.0 threshold (tool exits 2). One-time enable:
 #   git config core.hooksPath githooks
 set -euo pipefail
 
@@ -16,7 +16,8 @@ if [ ! -f src/cli.js ]; then
   exit 0
 fi
 
-mapfile -t files < <(git diff --cached --name-only --diff-filter=ACM -- '*.js' '*.mjs' '*.cjs')
+mapfile -t files < <(git diff --cached --name-only --diff-filter=ACM \
+  -- '*.js' '*.jsx' '*.ts' '*.tsx' '*.mjs' '*.cjs')
 
 if [ "${#files[@]}" -eq 0 ]; then
   exit 0
