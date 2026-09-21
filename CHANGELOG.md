@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.1](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.8.0...v0.8.1) (2026-09-21)
+
+
+### Bug Fixes
+
+* coverage keys via symlinked project root + pre-commit hook covers .ts/.tsx/.jsx ([#26](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/26)) ([01ee546](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/01ee5466bc269e228f6ac9678e66e45c4f1d97c5))
+
 ## [0.8.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.7.0...v0.8.0) (2026-09-20)
 
 
