@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.8.1...v0.9.0) (2026-09-30)
+
+
+### Features
+
+* duplication gate Type-2 clone detection — ignore_locals / ignore_literals ([#33](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/33)) ([4b06eba](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/4b06eba6a7554d263d17e56828ba58483ef7fd50))
+
 ## [0.8.1](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.8.0...v0.8.1) (2026-09-21)
 
 
