@@ -22,9 +22,12 @@
 //                            Flag hex colors outside constants and literals
 //                            repeated 3+ times per file.
 //   crap4js duplicates [--threshold N] [--min-tokens N] [--min-lines N]
+//                      [--ignore-locals] [--ignore-literals]
 //                      [--exclude GLOB]... [--source PATH]... [paths...]
 //                            Flag files whose duplicated lines exceed the
-//                            threshold (token windows within/across files).
+//                            threshold (token windows within/across files;
+//                            the ignore flags opt into renamed-clone and
+//                            literal masking).
 //   crap4js test-assertions [paths...]
 //                            Flag test() bodies with zero assertion calls.
 //   crap4js folder-structure Flag src/ dirs with loose (direct) files.
@@ -91,9 +94,12 @@ function usage() {
     '                           Flag hex colors outside constants and literals',
     '                           repeated 3+ times per file.',
     '  crap4js duplicates [--threshold N] [--min-tokens N] [--min-lines N]',
+    '                     [--ignore-locals] [--ignore-literals]',
     '                     [--exclude GLOB]... [--source PATH]... [paths...]',
     '                           Flag files whose duplicated lines exceed the',
-    '                           threshold (token windows within/across files)',
+    '                           threshold (token windows within/across files;',
+    '                           the ignore flags opt into renamed-clone and',
+    '                           literal masking)',
     '  crap4js test-assertions [paths...]',
     '                           Flag test()/it() bodies with zero assertion calls',
     '  crap4js folder-structure',
