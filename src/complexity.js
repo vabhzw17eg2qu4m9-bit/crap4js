@@ -36,7 +36,9 @@ const FUNCTION_LIKE = new Set(['FunctionExpression', 'ArrowFunctionExpression'])
 // Babel attaches extra keys the generic traversal should not descend into
 // (comment arrays, raw-source `extra`, `directives`, byte offsets). acorn's
 // `range`/`sourceType` are kept for safety even though acorn is no longer used.
-const SKIP_KEYS = new Set([
+// Exported: the duplicates gate's Type-2 normalizer walks AST subtrees with
+// the same exclusions when collecting function-local scopes.
+export const SKIP_KEYS = new Set([
   'type', 'loc', 'range', 'sourceType', 'start', 'end',
   'leadingComments', 'trailingComments', 'innerComments', 'extra', 'directives',
 ]);
@@ -112,6 +114,21 @@ export function parseSource(source, ext) {
   return parseWith(source, ext, false);
 }
 
+/**
+ * Parse source with the port's standard plugin routing, keeping the whole
+ * token stream plus the Program AST. Shared by tokenizeSource and the
+ * duplicates gate's Type-2 normalization pass, which reads function-local
+ * scopes out of the AST while masking the token lexemes.
+ *
+ * @param {string} source
+ * @param {string} [ext]  File extension routing flow vs typescript plugins.
+ * @returns {{tokens: object[], program: object}}
+ */
+export function parseTokenized(source, ext) {
+  const ast = parseWith(source, ext, true);
+  return { tokens: ast.tokens, program: ast.program };
+}
+
 // @babel/parser emits comments inside the token stream (tokens: true) as
 // bare strings (`CommentLine`/`CommentBlock`), while real tokens carry a
 // type object — skipped like upstream skips its CommentToken nodes.
@@ -128,8 +145,8 @@ function isCommentToken(t) {
  * @returns {Array<{value: string, line: number}>}
  */
 export function tokenizeSource(source, ext) {
-  const ast = parseWith(source, ext, true);
-  return ast.tokens
+  const { tokens } = parseTokenized(source, ext);
+  return tokens
     .filter((t) => t.type.label !== 'eof' && !isCommentToken(t))
     .map((t) => ({ value: source.slice(t.start, t.end), line: t.loc.start.line }));
 }

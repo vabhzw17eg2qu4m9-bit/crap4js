@@ -445,6 +445,7 @@ no config):
 
 ```
 crap4js duplicates [--threshold N] [--min-tokens N] [--min-lines N]
+                   [--ignore-locals] [--ignore-literals]
                    [--exclude GLOB]... [--source PATH]... [paths...]
 ```
 
@@ -468,6 +469,38 @@ violation line is the first duplicated line and the message is
 `X.XX% duplicated lines > T%`. Because windows straddle statement
 boundaries, a repeated block usually drags the preceding line's final
 `;` into the duplicated set — same as upstream.
+
+Two opt-in normalizations extend detection to renamed clones
+("Type-2", upstream commit 0599df2; upstream reads the same knobs as the
+flat `ignore_locals`/`ignore_literals` YAML keys under the duplication
+gate — crap4js has no config, so they are kebab-case CLI flags):
+
+- `--ignore-locals`: identifiers declared inside a function — parameters
+  (except TS parameter properties, which reference API state, matching
+  upstream's `this.x` field-formal exclusion), local variables, loop and
+  catch variables, type parameters, locally declared functions, and
+  pattern/destructuring bindings — are renamed to `$L1`, `$L2`, ...
+  placeholders in first-use order before hashing, with one scope per
+  outermost method/constructor/function and nested functions sharing the
+  outermost scope (no inner-scope shadow tracking, like upstream).
+  Renamed clones hash identically, while locals swapped against each
+  other keep different placeholders and never match. The API surface —
+  called method names, type names, field references — keeps its lexeme.
+  Interpolation: upstream masks Dart's whole STRING_INTERPOLATION token
+  opaque in this mode; babel's stream is finer-grained — template static
+  text arrives as opaque constant chunks and the embedded identifiers are
+  renamed like any other local, so the same clones match without a
+  separate `$STR` rule.
+- `--ignore-literals`: string and numeric literal tokens are replaced
+  with `$STR`/`$NUM` placeholders before hashing.
+
+With both knobs off the gate reports exact copy-paste only (the default
+scan path is untouched). Detection is a union of two passes (upstream
+94299e0): when `--ignore-locals` is on, the raw-lexeme pass runs
+alongside the masked one and their duplicated-token marks are unioned —
+placeholders are numbered first-use-per-scope, so exact copies are never
+lost when enclosing scopes shift the numbering; the knobs can only add
+findings, thresholds and reporting are unchanged.
 
 Scan set: the standard gate selection (explicit paths or the default
 `src/` walk) unioned with every `--source` path — files with a source

@@ -327,3 +327,370 @@ test('tokenizeSource: lexemes and lines, comments and EOF skipped, TS routed', (
   );
   assert.deepEqual(ts.map((t) => t.line), [1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2]);
 });
+
+// ---------------------------------------------------------------------------
+// Type-2 clone detection (--ignore-locals / --ignore-literals), ported from
+// upstream 0599df2 + 94299e0. Fixture builders mirror the upstream ones:
+// each pair differs only in the dimension the test pins. Precision pairs
+// run 40-token windows (every window necessarily crosses the difference);
+// the raw-pass regression runs 5-token windows so interior windows of the
+// shared block exist.
+
+// Runs the duplicates CLI over two fixture files with the given flags.
+function runPair(contentA, contentB, flags, minTokens = '40') {
+  const root = fixture({ 'src/a.js': contentA, 'src/b.js': contentB });
+  try {
+    const ctx = fakeCtx(root);
+    const code = runDuplicates(
+      ['--min-tokens', minTokens, '--min-lines', '2', ...flags, 'src'],
+      ctx,
+    );
+    return { code, lines: ctx.lines };
+  } finally {
+    cleanup(root);
+  }
+}
+
+// Body whose only differences between clones are local names.
+function renamedMethod(name, value, i, item, prefix, suffix, result) {
+  return `
+export function ${name}(${value}, ${prefix}, ${suffix}, ${result}) {
+  for (let ${i} = 0; ${i} < ${value}.length; ${i}++) {
+    const ${item} = ${value}[${i}];
+    if (${item}.length === 0) {
+      continue;
+    }
+    if (${item}.startsWith(${prefix})) {
+      ${result}.push(${item}.substring(${prefix}.length));
+    } else if (${item}.endsWith(${suffix})) {
+      ${result}.push(${item}.substring(0, ${item}.length - ${suffix}.length));
+    } else {
+      ${result}.push(${item}.toLowerCase());
+    }
+  }
+  return ${result};
+}
+`;
+}
+const renamedOriginal = () =>
+  renamedMethod('process', 'values', 'i', 'item', 'prefix', 'suffix', 'result');
+const renamedClone = () =>
+  renamedMethod('handle', 'data', 'idx', 'entry', 'start', 'end', 'out');
+
+// Body using two params in one order, and the same body with them crossed —
+// a semantic swap: renaming must keep the placeholder streams different.
+function swappable(name, a, b, total) {
+  return `
+export function ${name}(${a}, ${b}) {
+  let ${total} = 0;
+  for (let i = 0; i < ${a}; i++) {
+    ${total} += ${b};
+    if (${total} > ${a}) {
+      ${total} -= 1;
+    }
+  }
+  while (${total} < ${b}) {
+    ${total} += ${a};
+  }
+  return ${total};
+}
+`;
+}
+function swapped(name, x, y, sum) {
+  return `
+export function ${name}(${x}, ${y}) {
+  let ${sum} = 0;
+  for (let i = 0; i < ${y}; i++) {
+    ${sum} += ${x};
+    if (${sum} > ${y}) {
+      ${sum} -= 1;
+    }
+  }
+  while (${sum} < ${x}) {
+    ${sum} += ${y};
+  }
+  return ${sum};
+}
+`;
+}
+
+// Body whose calls differ on `method` in every branch, so no window can
+// avoid the difference (API surface stays visible).
+function callee(name, value, result, method) {
+  return `
+export function ${name}(${value}, ${result}) {
+  for (let i = 0; i < ${value}.length; i++) {
+    const item = ${value}[i];
+    if (item.length === 0) {
+      ${result}.${method}(item);
+    } else if (item.startsWith('x')) {
+      ${result}.${method}(item);
+    } else if (item.endsWith('y')) {
+      ${result}.${method}(item.toLowerCase());
+    } else {
+      ${result}.${method}(item.trim());
+    }
+  }
+}
+`;
+}
+
+// Class whose method reads a field; clones differ in the field name, which
+// is API surface, not a local.
+function repo(className, field, key, value) {
+  return `
+export class ${className} {
+  ${field} = new Map();
+  load(${key}) {
+    if (this.${field}.has(${key})) {
+      return this.${field}.get(${key}) ?? 0;
+    }
+    const ${value} = parse(${key});
+    this.${field}.set(${key}, ${value});
+    return ${value};
+  }
+}
+export function parse(s) {
+  return s.length;
+}
+`;
+}
+
+// Body whose only differences between clones are literals.
+function literal(name, limit, label) {
+  return `
+export function ${name}(values, result) {
+  const stamp = ${limit}n;
+  for (let i = 0; i < values.length; i++) {
+    if (values.length > ${limit}) {
+      throw new RangeError('${label}');
+    }
+    const item = values[i];
+    if (item.startsWith('${label}')) {
+      result.push(item);
+    } else if (item.endsWith('${label}')) {
+      result.push(item.toLowerCase());
+    } else {
+      result.push(item.trim());
+    }
+  }
+  return result.length;
+}
+`;
+}
+
+// Body exercising every renamed declaration kind: destructuring, for-of
+// loop variables, a locally declared function, a catch parameter, and a
+// template literal embedding a local.
+function kinds(name, input, head, tail, count, piece, helper, err) {
+  return `
+export function ${name}(${input}) {
+  try {
+    const [${head}, ${tail}] = [String(${input}).length, Number(${input}) % 7];
+    let ${count} = 0;
+    for (const ${piece} of [${head}, ${tail}]) {
+      ${count} += ${piece};
+    }
+    function ${helper}(size, pad = 0, ...extra) {
+      const [${head}0, ...notes] = extra;
+      const { length, ...fields } = size;
+      return length + pad + ${head}0 + notes.length + fields.length + ${count};
+    }
+    return ${helper}(\`\${${count}}\`);
+  } catch (${err}) {
+    return ${err}.length;
+  }
+}
+`;
+}
+
+// An exact-copy block whose enclosing scope carries extra leading locals,
+// shifting placeholder numbering against plainScope (upstream 94299e0).
+function shiftedScope() {
+  return `
+export function run(mode) {
+  const noise = mode + 1;
+  const warm = noise % 2 === 0 ? noise : mode;
+  const log = [warm];
+  const sink = [];
+  for (let i = 0; i < 9; i++) {
+    const entry = 7 * i;
+    if (entry < 0) {
+      sink.push(0);
+    } else {
+      sink.push(entry + 1);
+    }
+  }
+  return [sink, log];
+}
+`;
+}
+function plainScope() {
+  return `
+export function walk() {
+  const sink = [];
+  for (let i = 0; i < 9; i++) {
+    const entry = 7 * i;
+    if (entry < 0) {
+      sink.push(0);
+    } else {
+      sink.push(entry + 1);
+    }
+  }
+  return sink;
+}
+`;
+}
+
+// Body whose template literals embed a local; clones rename it.
+function interpolated(name, who) {
+  return `
+export function ${name}(users) {
+  const total = users.length;
+  const ${who} = 'x';
+  const label = \`\${${who}}: \${total}\`;
+  for (const user of users) {
+    log(\`\${user} -> \${label}\`);
+  }
+  return label;
+}
+`;
+}
+
+test('ignore-locals detects renamed clone across files', () => {
+  const { code, lines } = runPair(renamedOriginal(), renamedClone(), ['--ignore-locals']);
+  assert.equal(code, 2, 'renamed clone must be detected');
+  assert.equal(lines.length, 3);
+  assert.match(lines[0], /^src\/a\.js:2: /);
+  assert.match(lines[1], /^src\/b\.js:2: /);
+  assert.equal(lines[2], '2/2 files over 1% duplication\n');
+});
+
+test('renamed clone passes without ignore-locals (back-compat)', () => {
+  const { code } = runPair(renamedOriginal(), renamedClone(), []);
+  assert.equal(code, 0, 'default mode is Type-1 only');
+});
+
+test('ignore-literals masks string and numeric literals', () => {
+  const masked = runPair(
+    literal('process', 100, 'alpha'),
+    literal('handle', 200, 'beta'),
+    ['--ignore-literals'],
+  );
+  assert.equal(masked.code, 2, 'literals must be masked');
+  const raw = runPair(literal('process', 100, 'alpha'), literal('handle', 200, 'beta'), []);
+  assert.equal(raw.code, 0, 'without ignore-literals literals stay visible');
+});
+
+test('locals of every declaration kind are renamed', () => {
+  const { code } = runPair(
+    kinds('run', 'input', 'head', 'tail', 'count', 'piece', 'helper', 'err'),
+    kinds('go', 'source', 'first', 'rest', 'total', 'part', 'assist', 'problem'),
+    ['--ignore-locals'],
+  );
+  assert.equal(code, 2, 'destructuring, loop vars, local functions, catch params renamed');
+});
+
+test('swapped locals never match under ignore-locals', () => {
+  const { code } = runPair(
+    swappable('calc', 'alpha', 'beta', 'total'),
+    swapped('handle', 'first', 'second', 'sum'),
+    ['--ignore-locals'],
+  );
+  assert.equal(code, 0, 'consistent renaming keeps a/b != y/x');
+});
+
+test('different called methods never match', () => {
+  // 50-token windows: the shared masked prefix between the renamed header
+  // and the first call is shorter than the window, so no window can avoid
+  // the differing method name.
+  const { code } = runPair(
+    callee('process', 'values', 'result', 'add'),
+    callee('handle', 'data', 'out', 'push'),
+    ['--ignore-locals'],
+    '50',
+  );
+  assert.equal(code, 0, 'API surface (called method names) stays visible');
+});
+
+test('field references stay visible under ignore-locals', () => {
+  const { code } = runPair(
+    repo('RepoA', '_cache', 'key', 'value'),
+    repo('RepoB', '_store', 'name', 'raw'),
+    ['--ignore-locals'],
+  );
+  assert.equal(code, 0, 'field names are API surface, not locals');
+});
+
+test('exact copy never lost when scopes shift placeholder numbering', () => {
+  // The masked pass misses this pair (leading locals shift $L numbering);
+  // the union with the raw pass must still detect it.
+  const root = fixture({ 'src/a.js': shiftedScope(), 'src/b.js': plainScope() });
+  try {
+    const ctx = fakeCtx(root);
+    const code = runDuplicates(
+      ['--min-tokens', '5', '--min-lines', '2', '--ignore-locals', 'src'],
+      ctx,
+    );
+    assert.equal(code, 2, 'raw pass must keep Type-1 detection under masking');
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('template literals embed renamable locals under ignore-locals', () => {
+  const matched = runPair(
+    interpolated('process', 'who'),
+    interpolated('handle', 'name'),
+    ['--ignore-locals'],
+  );
+  assert.equal(matched.code, 2, 'embedded locals are renamed consistently');
+  const raw = runPair(interpolated('process', 'who'), interpolated('handle', 'name'), []);
+  assert.equal(raw.code, 0, 'raw lexemes keep the embedded local visible');
+});
+
+test('constructor parameter properties are API surface (TS)', () => {
+  const tsClass = (name, prop) => `
+export class ${name} {
+  count = 0;
+  label = '';
+  constructor(private ${prop}) {
+    this.count = ${prop}.length;
+    this.label = String(${prop}).slice(0, 3);
+  }
+}
+`;
+  const root = fixture({
+    'src/a.ts': tsClass('Store', 'data'),
+    'src/b.ts': tsClass('Vault', 'payload'),
+  });
+  try {
+    const ctx = fakeCtx(root);
+    const code = runDuplicates(
+      ['--min-tokens', '20', '--min-lines', '2', '--ignore-locals', 'src'],
+      ctx,
+    );
+    assert.equal(code, 0, 'TS parameter properties reference API state');
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('parseDuplicateArgs: boolean normalization flags are bare and opt-in', () => {
+  assert.deepEqual(parseDuplicateArgs(['--ignore-locals', '--ignore-literals']), {
+    threshold: 1,
+    minTokens: 50,
+    minLines: 5,
+    exclude: [],
+    source: [],
+    paths: [],
+    ignoreLocals: true,
+    ignoreLiterals: true,
+  });
+  // Absent means false: the defaults object gains no keys (pinned above).
+  assert.equal(parseDuplicateArgs([]).ignoreLocals, undefined);
+  // Value syntax is reserved for value flags — a boolean flag with `=`
+  // is rejected like any unknown flag (upstream's unknown-key rejection).
+  assert.throws(() => parseDuplicateArgs(['--ignore-localss=x']), /unknown flag: --ignore-localss/);
+  assert.throws(() => parseDuplicateArgs(['--ignore-locals=false']), /unknown flag: --ignore-locals/);
+});

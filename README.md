@@ -279,17 +279,40 @@ violations exist.
 ## `duplicates`
 
 `crap4js duplicates [--threshold N] [--min-tokens N] [--min-lines N]
-[--exclude GLOB]... [--source PATH]... [paths...]` (port of crap4dart's
-duplication gate, 0.9.x, including its per-gate `sources` union) detects
-exact copy-paste duplicates. Every scanned file is tokenized (comments
-skipped, raw lexemes kept) and every window of `--min-tokens` tokens
-(default 50) spanning at least `--min-lines` source lines (default 5) is
-indexed; any window appearing twice or more — within or across files —
-marks its tokens duplicated. A file violates when its distinct duplicated
-lines exceed `--threshold` percent (default 1) of its lines; the reported
-line is the first duplicated one. Because windows straddle statement
+[--ignore-locals] [--ignore-literals] [--exclude GLOB]... [--source
+PATH]... [paths...]` (port of crap4dart's duplication gate, 0.9.x,
+including its per-gate `sources` union) detects exact copy-paste
+duplicates. Every scanned file is tokenized (comments skipped, raw
+lexemes kept) and every window of `--min-tokens` tokens (default 50)
+spanning at least `--min-lines` source lines (default 5) is indexed; any
+window appearing twice or more — within or across files — marks its
+tokens duplicated. A file violates when its distinct duplicated lines
+exceed `--threshold` percent (default 1) of its lines; the reported line
+is the first duplicated one. Because windows straddle statement
 boundaries, the lines adjacent to a duplicated block are usually marked
 too.
+
+Two opt-in normalizations extend detection to renamed clones (upstream
+"Type-2", 0.9.x commit 0599df2):
+
+- `--ignore-locals`: identifiers declared inside a function — parameters
+  (except TS parameter properties, which reference API state), local
+  variables, loop and catch variables, type parameters, local functions,
+  and destructuring bindings — are renamed to `$L1`, `$L2`, ... in
+  first-use order before hashing. Renamed clones hash identically, while
+  locals swapped against each other keep different placeholders and never
+  match. The API surface — called method names, type names, field
+  references — keeps its lexeme. Template literals need no masking of
+  their own: babel's stream keeps their static text as opaque constant
+  chunks and the embedded identifiers are renamed like any other local.
+- `--ignore-literals`: string and numeric literal tokens are replaced
+  with `$STR`/`$NUM` placeholders before hashing.
+
+With both flags off the gate reports exact copy-paste only. Detection is
+a union of two passes (upstream 94299e0): the raw-lexeme pass always runs
+alongside the masked one, so enabling `--ignore-locals` can only add
+findings — exact copies are never lost when enclosing scopes shift the
+placeholder numbering.
 
 The scan set is the standard gate selection (explicit paths or the
 `src/` walk — test files and test directories always excluded) unioned
