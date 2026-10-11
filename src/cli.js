@@ -36,7 +36,7 @@
 // The first argument selects a subcommand when it is exactly `profile`,
 // `file-naming`, `nesting`, `class-size`, `weight-of-class`, `unused-code`,
 // `unused-files`, `banned-imports`, `magic-constants`, `duplicates`,
-// `test-assertions`, `folder-structure`, or `skill`;
+// `test-assertions`, `folder-structure`, `mutation`, or `skill`;
 // anything else is analyzed as before.
 //
 // Exit codes: 0 success; 1 usage error; 2 CRAP/profile threshold exceeded
@@ -58,6 +58,7 @@ import { runMagicConstants } from './magicConstants.js';
 import { runDuplicates } from './duplicates.js';
 import { runTestAssertions } from './testAssertions.js';
 import { runFolderStructure } from './folderStructure.js';
+import { runMutation } from './mutation.js';
 import { parseProfileArgs, runProfile } from './profile.js';
 import { runSkill } from './skill.js';
 
@@ -104,6 +105,12 @@ function usage() {
     '                           Flag test()/it() bodies with zero assertion calls',
     '  crap4js folder-structure',
     '                           Flag src/ directories with loose direct files',
+    '  crap4js mutation [--min-score N] [--max-survivors N]',
+    '                   [--timeout-seconds N] [--max-mutants N]',
+    '                   [--operators CAT]... [--exclude GLOB]... [paths...]',
+    '                           Mutate one operator/literal at a time and',
+    '                           re-run the test suite (node --test) per',
+    '                           mutant; covered sites only, survivors flagged',
     '  crap4js skill            Print the crap4js profiling skill for AI agents',
     '',
   ].join('\n');
@@ -124,6 +131,7 @@ const SUBCOMMANDS = {
   duplicates: (args, ctx) => runDuplicates(args, ctx),
   'test-assertions': (args, ctx) => runTestAssertions(args, ctx),
   'folder-structure': (args, ctx) => runFolderStructure(args, ctx),
+  mutation: (args, ctx) => runMutation(args, ctx),
   skill: (_args, ctx) => runSkill(ctx),
 };
 

@@ -72,6 +72,12 @@ crap4js duplicates [--threshold N] [--min-tokens N] [--min-lines N]
 crap4js test-assertions [paths...]
                          Flag test()/it() bodies with zero assertion calls.
 crap4js folder-structure Flag src/ directories with loose direct files.
+crap4js mutation [--min-score N] [--max-survivors N]
+                 [--timeout-seconds N] [--max-mutants N]
+                 [--operators CAT]... [--exclude GLOB]... [paths...]
+                 Mutate one operator/literal at a time and re-run the
+                 test suite per mutant; covered sites only, survivors
+                 flagged.
 crap4js skill            Print the crap4js profiling skill for AI agents.
 ```
 
@@ -80,7 +86,8 @@ usage error.
 
 The gate-check subcommands (`file-naming`, `nesting`, `class-size`,
 `weight-of-class`, `unused-code`, `unused-files`, `banned-imports`,
-`magic-constants`, `duplicates`, `test-assertions`, `folder-structure`) are ports of
+`magic-constants`, `duplicates`, `test-assertions`, `folder-structure`,
+`mutation`) are ports of
 crap4dart gates. crap4js has no gate framework or config
 file, so each gate is a subcommand with its default thresholds and the
 shared exit-code contract: `0` pass/skip, `1` usage error, `2` violations.
@@ -355,6 +362,53 @@ root) count; files in subdirectories are the organized form. Violation:
 (max 0)`. Takes no arguments (any argument is a usage error); the
 directory and threshold are baked in. Exit 2 iff violations exist.
 
+## `mutation`
+
+`crap4js mutation [...]` (port of crap4dart's mutation gate, commit
+c865ec3, adapted from the unclebob/mutator research conclusions) runs
+mutation testing over the selected sources: a declarative,
+category-tagged operator table is matched on the parsed babel AST — every
+replacement span comes from node/token offsets, never regex:
+
+- `arithmetic`: `+`↔`-`, `*`↔`/`, `/`→`%` (upstream's Dart `~/` has no JS
+  form; modulo is the analog)
+- `boundary`: `>`↔`>=`, `<`↔`<=`, `>`↔`<`, `>=`↔`<=`
+- `equality`: `==`↔`!=`, `===`↔`!==` (the strict forms are JS-only)
+- `logical`: `&&`↔`||`
+- `boolean`: `true`↔`false`
+- `constant`: integer `0`↔`1`, `-1`→`0` (the `1` operand yields its own
+  site too, like upstream)
+- `unary`: delete a `!` prefix (prefix expressions only — the postfix TS
+  non-null `!` would corrupt its operand)
+
+Only COVERED sites are scored: a site is covered when its containing
+method was executed (Istanbul coverage, `coverage/coverage-final.json`)
+and the site's line is not recorded as unexecuted; sites in unexecuted
+code are `uncovered` — excluded from the score denominator and never
+executed. Every covered site is then mutated one at a time and the
+project's test suite re-runs against it (`node --test` in the project
+root, the analog of upstream's `dart test`). A non-zero exit kills the
+mutant — a module-load failure plays the Dart compile-error role, since
+the suite refuses to run. A timeout counts as survived: the suite did not
+kill the mutant deterministically. The file is restored after every
+mutant, also after timeouts and errors.
+
+The mutation score is `killed / (killed + survived)`. The gate fails when
+the score is below `--min-score` (default 0.8) or more than
+`--max-survivors` (default 0) mutants survive, reporting one violation
+per survivor: `src/lib.js:2: survived constant mutant \`0\` -> \`1\` in
+sign`. Summary: `mutation score 83.3% (5 killed, 1 survived, 0
+uncovered)`, with `; survivors by category: constant=1` appended on
+failure. Skips (exit 0) without coverage data or a `test/` directory.
+`--timeout-seconds` (default 60) bounds each mutant run, `--max-mutants`
+(default 500) caps the executed sites deterministically (file order, then
+offset), `--operators` selects a category subset (default: all),
+`--exclude` globs skip files project-relatively.
+
+Mutation testing runs the test suite once per mutant — expensive — so
+like every gate here it only runs when invoked as the `mutation`
+subcommand (upstream: disabled by default). Enable it on fast suites.
+
 ## `skill`
 
 `crap4js skill` prints a JavaScript-adapted profiling skill for AI agents
@@ -426,6 +480,7 @@ crap4js/
     magicConstants.js  magic-constants command
     testAssertions.js  test-assertions command
     folderStructure.js  folder-structure command
+    mutation.js   mutation command (operator table, engine, coverage gating)
     gateCommon.js  shared gate-subcommand runner
     imports.js     import-specifier collection + resolution
     skill.js       skill command text

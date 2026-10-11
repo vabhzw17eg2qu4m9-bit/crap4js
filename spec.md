@@ -61,13 +61,19 @@ crap4js test-assertions [paths...]
                          Flag test()/it() bodies with zero assertion calls.
 crap4js folder-structure
                          Flag src/ directories with loose direct files.
+crap4js mutation [--min-score N] [--max-survivors N]
+                 [--timeout-seconds N] [--max-mutants N]
+                 [--operators CAT]... [--exclude GLOB]... [paths...]
+                 Mutate one operator/literal at a time and re-run the
+                 test suite per mutant; covered sites only, survivors
+                 flagged.
 crap4js skill            Print the crap4js profiling skill for AI agents.
 ```
 
 The first argument selects a subcommand when it is exactly `profile`,
 `file-naming`, `nesting`, `class-size`, `weight-of-class`, `unused-code`,
 `unused-files`, `banned-imports`, `magic-constants`, `duplicates`, `test-assertions`,
-`folder-structure`, or `skill`; anything else (flags, paths)
+`folder-structure`, `mutation`, or `skill`; anything else (flags, paths)
 is analyzed as the CRAP command above. `--changed` is mutually exclusive
 with explicit paths. Unknown flags are a usage error (exit 1).
 
@@ -324,7 +330,8 @@ and `banned-imports` are ports of the crap4dart 0.5.x gates of the same
 names; `magic-constants` is a port of the crap4dart 0.6.x–0.9.x
 magic_constants gate; `test-assertions`, `folder-structure`, and
 `duplicates` are ports of the crap4dart 0.9.x test_assertions,
-folder_structure, and duplication gates.
+folder_structure, and duplication gates; `mutation` is a port of the
+crap4dart mutation gate (commit c865ec3).
 crap4js has no gate framework and no config file, so each gate is
 a CLI subcommand with its built-in default thresholds; every gate accepts
 `[paths...]` (default: the normal source-selection rules, test files and
@@ -559,6 +566,59 @@ organized form; a missing `src/` checks nothing and passes. Summary:
 `M directories organized into packages` / `N directory(ies) with
 loose-file sprawl`. Takes no arguments — any argument is a usage error
 (exit 1).
+
+### mutation
+
+Port of the crap4dart mutation gate (commit c865ec3), adapted from the
+unclebob/mutator research conclusions. A declarative, category-tagged
+operator table is matched on the parsed babel AST; replacement spans come
+from node/token offsets, never regex:
+
+- `arithmetic`: `+`↔`-`, `*`↔`/`, `/`→`%` (upstream's `/`→`~/` is Dart
+  integer division; modulo is the JS analog)
+- `boundary`: `>`↔`>=`, `<`↔`<=`, `>`↔`<`, `>=`↔`<=`
+- `equality`: `==`↔`!=` plus the JS-only strict pair `===`↔`!==`
+- `logical`: `&&`↔`||` (matched on `LogicalExpression` where babel keeps
+  them, `BinaryExpression` elsewhere)
+- `boolean`: `true`↔`false`
+- `constant`: integer `0`↔`1` (bare lexemes only — `0x0`, `1.0`,
+  `1_000` never mutate), `-1`→`0` over the whole span, with the `1`
+  operand yielding its own site like upstream
+- `unary`: delete a `!` prefix; prefix expressions only (the postfix TS
+  non-null `!` must not corrupt its operand)
+
+One table row at one location is one mutation site
+`{file, line, method, category, original, mutant}`; the gate scans the
+normal gate file selection (test files/directories always excluded) plus
+`--exclude` globs matched project-relatively.
+
+A site is COVERED when its containing method was executed in the
+Istanbul coverage data (`coverage/coverage-final.json`, overridable with
+`--coverage`) and the site's line is not recorded as unexecuted; sites
+outside every method fall back to raw line coverage. Uncovered sites are
+excluded from the score denominator and never executed. Every covered
+site is mutated one at a time (one textual replacement at its exact
+span) and the project's test suite re-runs against it (`node --test` in
+the project root — the analog of upstream's `dart test`; the runner
+environment strips the enclosing run's `NODE_TEST_CONTEXT` so a nested
+runner cannot mistake itself for a test child). A non-zero exit kills
+the mutant; a module-load failure is killed the same way, because the
+suite refuses to run — the JS analog of upstream's compile-error kill. A
+timeout counts as survived: the suite did not kill the mutant
+deterministically. The file is restored after every mutant, also after
+timeouts and errors.
+
+The mutation score is `killed / (killed + survived)`. The gate fails when
+the score is below `--min-score` (default 0.8) or when more than
+`--max-survivors` (default 0) mutants survive, and reports one
+`file:line` violation per survivor (`survived constant mutant \`0\` ->
+\`1\` in sign`), so diff mode and baseline conventions apply unchanged.
+`--timeout-seconds` (default 60) bounds each mutant run;
+`--max-mutants` (default 500) caps the executed sites deterministically
+(file order, then offset). Without coverage data or without a `test/`
+directory the gate skips itself (exit 0). Expensive — the suite runs
+once per mutant — so it only runs when invoked as the `mutation`
+subcommand, which is the port's form of upstream's disabled-by-default.
 
 ### not ported from 0.7–0.9 (no crap4js equivalent)
 
