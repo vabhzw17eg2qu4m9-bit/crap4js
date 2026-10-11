@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.11.0...v0.12.0) (2026-10-11)
+
+
+### Features
+
+* **mutation:** diff-scoped execution + scope_tests — port of upstream crap4dart 8228585 ([#40](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/40)) ([24dc500](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/24dc5008af5f8b745f2f9c2bf6190e98c6916ae4))
+
 ## [0.11.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.10.0...v0.11.0) (2026-10-11)
 
 
