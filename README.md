@@ -74,10 +74,13 @@ crap4js test-assertions [paths...]
 crap4js folder-structure Flag src/ directories with loose direct files.
 crap4js mutation [--min-score N] [--max-survivors N]
                  [--timeout-seconds N] [--max-mutants N]
+                 [--cache|--no-cache] [--test-args ARG]...
                  [--operators CAT]... [--exclude GLOB]... [paths...]
                  Mutate one operator/literal at a time and re-run the
                  test suite per mutant; covered sites only, survivors
-                 flagged.
+                 flagged. Killed mutants of unchanged methods are
+                 replayed from .crap-mutation-cache.json (--no-cache
+                 disables); --test-args scopes the per-mutant suite.
 crap4js skill            Print the crap4js profiling skill for AI agents.
 ```
 
@@ -391,19 +394,42 @@ root, the analog of upstream's `dart test`). A non-zero exit kills the
 mutant — a module-load failure plays the Dart compile-error role, since
 the suite refuses to run. A timeout counts as survived: the suite did not
 kill the mutant deterministically. The file is restored after every
-mutant, also after timeouts and errors.
+mutant, also after timeouts and errors; an end-of-run tree integrity
+check (port of crap4dart 8b2e8e8) snapshots every file before the loop
+and re-verifies the whole tree in an outer finally — files that drifted
+(an out-of-band write defeating the per-site restore) are re-restored
+and surfaced as `INTEGRITY` violations in the summary plus a stderr
+warning.
 
 The mutation score is `killed / (killed + survived)`. The gate fails when
 the score is below `--min-score` (default 0.8) or more than
 `--max-survivors` (default 0) mutants survive, reporting one violation
 per survivor: `src/lib.js:2: survived constant mutant \`0\` -> \`1\` in
 sign`. Summary: `mutation score 83.3% (5 killed, 1 survived, 0
-uncovered)`, with `; survivors by category: constant=1` appended on
-failure. Skips (exit 0) without coverage data or a `test/` directory.
-`--timeout-seconds` (default 60) bounds each mutant run, `--max-mutants`
-(default 500) caps the executed sites deterministically (file order, then
-offset), `--operators` selects a category subset (default: all),
-`--exclude` globs skip files project-relatively.
+uncovered, 0 cached)`, with `; survivors by category: constant=1`
+appended on failure. Skips (exit 0) without coverage data or a `test/`
+directory. `--timeout-seconds` (default 60) bounds each mutant run,
+`--max-mutants` (default 500) caps the executed sites deterministically
+(file order, then offset), `--operators` selects a category subset
+(default: all), `--exclude` globs skip files project-relatively.
+
+**Digest-incremental cache** (port of crap4dart 16d9c4c,
+"killed-stays-killed"): killed mutants of methods whose exact source span
+is unchanged since the last run are replayed from
+`.crap-mutation-cache.json` at the project root (counted killed, reported
+as `cached`) instead of re-executing the suite; survivors and timeouts
+are always re-executed because the suite may have improved, and coverage
+gating is re-derived from fresh coverage every run. Sites are stored
+method-relative (offsets relative to the containing method's start, keyed
+by an FNV-1a digest of the method's exact source text), so an edit in an
+earlier method of the same file invalidates only that method. The
+envelope carries a meta fingerprint — tool version, enabled operators,
+`--test-args` — and any mismatch (or a corrupt/outdated file) wipes the
+cache into a full re-execution. `--cache`/`--no-cache` (default: cache
+on) opt out entirely. `--test-args ARG` (repeatable, default `--test`)
+scopes the per-mutant invocation (`node <args...>`): scoping the suite is
+your responsibility — a mutant counts as killed only if the scoped suite
+would kill it.
 
 Mutation testing runs the test suite once per mutant — expensive — so
 like every gate here it only runs when invoked as the `mutation`
@@ -481,6 +507,7 @@ crap4js/
     testAssertions.js  test-assertions command
     folderStructure.js  folder-structure command
     mutation.js   mutation command (operator table, engine, coverage gating)
+    mutationCache.js  digest-incremental mutation cache (killed-stays-killed)
     gateCommon.js  shared gate-subcommand runner
     imports.js     import-specifier collection + resolution
     skill.js       skill command text

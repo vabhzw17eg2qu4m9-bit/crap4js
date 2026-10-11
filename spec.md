@@ -606,7 +606,14 @@ the mutant; a module-load failure is killed the same way, because the
 suite refuses to run — the JS analog of upstream's compile-error kill. A
 timeout counts as survived: the suite did not kill the mutant
 deterministically. The file is restored after every mutant, also after
-timeouts and errors.
+timeouts and errors. An end-of-run tree integrity check (port of
+crap4dart 8b2e8e8) snapshots every file it will mutate before the loop
+and re-verifies the whole tree in an outer finally: any file whose
+on-disk content drifted from its snapshot (an out-of-band write
+defeating the per-site restore — external edit, killed process) is
+re-restored AND surfaced as an `INTEGRITY` violation in the summary
+(`; INTEGRITY: re-restored after run: src/x.js`) plus a stderr warning;
+the tree is healed, but the run must be treated as suspect.
 
 The mutation score is `killed / (killed + survived)`. The gate fails when
 the score is below `--min-score` (default 0.8) or when more than
@@ -619,6 +626,25 @@ the score is below `--min-score` (default 0.8) or when more than
 directory the gate skips itself (exit 0). Expensive — the suite runs
 once per mutant — so it only runs when invoked as the `mutation`
 subcommand, which is the port's form of upstream's disabled-by-default.
+
+**Digest-incremental cache + test_args** (port of crap4dart 16d9c4c):
+`.crap-mutation-cache.json` at the project root (gitignored) stores
+per-method outcomes keyed by `rel/path#methodName` and the FNV-1a digest
+of the method's exact source text. A killed mutant of an UNCHANGED method
+is replayed from the cache (counted killed, reported as `N cached` in
+the summary) instead of re-executed; survivors and timeouts always
+re-execute (the suite may have improved), and coverage gating is
+re-derived from fresh coverage every run. Site offsets are stored
+method-relative, so an edit in an earlier method of the same file
+invalidates only that method. The envelope carries a meta fingerprint —
+tool version (`crap4js <version>`), sorted enabled operators, joined
+`test_args` — and any mismatch, corrupt file, or envelope-version change
+wipes the cache into a full re-execution. Flags: `--cache`/`--no-cache`
+(default: cache on) and `--test-args ARG` (repeatable, values append to
+the default `--test`) scope the per-mutant invocation
+(`node <test-args...>`) — strict validation (non-empty list of non-empty
+strings); scoping the suite is the consumer's responsibility, since a
+mutant counts as killed only if the scoped suite would kill it.
 
 ### not ported from 0.7–0.9 (no crap4js equivalent)
 

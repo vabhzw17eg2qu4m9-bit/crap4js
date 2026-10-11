@@ -121,6 +121,8 @@ test('parseMutationArgs: upstream defaults, repeatable operators and exclude', (
     coverage: 'coverage/coverage-final.json',
     operators: [...OPERATOR_CATEGORIES],
     exclude: [],
+    cache: true,
+    testArgs: ['--test'],
     paths: [],
   });
   const opts = parseMutationArgs([
@@ -217,7 +219,7 @@ test('hangs', () => { setInterval(() => {}, 10_000); });
     writeCoverage(hanging, { 'loopy.js': coverageEntry('loopy.js', [1]) });
     const sites = detectSites(readFileSync(path.join(hanging, 'src/loopy.js'), 'utf8'), '.js');
     sites.forEach((s) => { s.file = path.join(hanging, 'src/loopy.js'); });
-    const outcomes = runEngine(hanging, sites, 1_000, runMutantTests);
+    const { outcomes } = runEngine(hanging, sites, 1_000, runMutantTests);
     assert.equal(outcomes[0].outcome, TIMEOUT);
     assert.equal(readFileSync(path.join(hanging, 'src/loopy.js'), 'utf8'), 'export const forever = 1;\n');
     cleanup(hanging);
@@ -233,10 +235,11 @@ test('engine: real mutants — five killed, one survived, file restored after ev
     const sites = detectSites(SIGN_SRC, '.js');
     assert.equal(sites.length, 6);
     sites.forEach((s) => { s.file = file; });
-    const outcomes = runEngine(root, sites, 60_000, runMutantTests);
+    const { outcomes, integrityViolations } = runEngine(root, sites, 60_000, runMutantTests);
     assert.equal(outcomes.filter((o) => o.outcome === KILLED).length, 5);
     assert.equal(outcomes.filter((o) => o.outcome === SURVIVED).length, 1);
     assert.equal(outcomes.find((o) => o.outcome === SURVIVED).site.original, '0');
+    assert.deepEqual(integrityViolations, []);
     assert.equal(readFileSync(file, 'utf8'), SIGN_SRC);
   } finally {
     cleanup(root);
@@ -329,7 +332,7 @@ test('retries', () => assert.equal(RETRIES, 0));
     const sites = detectSites(readFileSync(file, 'utf8'), '.js');
     sites.forEach((s) => { s.file = file; });
     assert.equal(sites.length, 3); // `0`, `!==`, `0`
-    const outcomes = runEngine(root, sites, 60_000, runMutantTests);
+    const { outcomes } = runEngine(root, sites, 60_000, runMutantTests);
     assert.equal(outcomes.length, 3);
     assert.ok(outcomes.every((o) => o.outcome === KILLED), 'every mutant killed');
   } finally {
@@ -360,13 +363,14 @@ test('runMutation: violation lines, summary, and exit code through the CLI', () 
     const r = runCli(root, ['mutation']);
     assert.equal(r.status, 2);
     assert.match(r.stdout, /src\/lib\.js:2: survived constant mutant `0` -> `1` in sign/);
-    assert.match(r.stdout, /mutation score 83\.3% \(5 killed, 1 survived, 0 uncovered\)/);
+    assert.match(r.stdout, /mutation score 83\.3% \(5 killed, 1 survived, 0 uncovered, 0 cached\)/);
     assert.match(r.stdout, /; survivors by category: constant=1/);
 
-    // Loosening the survivor cap passes the same run.
-    const ok = runCli(root, ['mutation', '--max-survivors', '1']);
+    // Loosening the survivor cap passes the same run (--no-cache: the
+    // first run just cached the kills; this one re-executes cold).
+    const ok = runCli(root, ['mutation', '--max-survivors', '1', '--no-cache']);
     assert.equal(ok.status, 0);
-    assert.match(ok.stdout, /mutation score 83\.3% \(5 killed, 1 survived, 0 uncovered\)/);
+    assert.match(ok.stdout, /mutation score 83\.3% \(5 killed, 1 survived, 0 uncovered, 0 cached\)/);
   } finally {
     cleanup(root);
   }
@@ -388,17 +392,25 @@ test('mutation gate is opt-in: the default analyze run never mutates', () => {
   }
 });
 
-test('mutationSummary formats the pass, fail, and skip lines', () => {
+test('mutationSummary formats the pass, fail, skip, and integrity lines', () => {
   assert.equal(
     mutationSummary({ killed: 5, survived: 1, uncovered: 0, score: 5 / 6, violations: 0 }),
-    'mutation score 83.3% (5 killed, 1 survived, 0 uncovered)',
+    'mutation score 83.3% (5 killed, 1 survived, 0 uncovered, 0 cached)',
   );
   assert.equal(
     mutationSummary({
       killed: 5, survived: 1, uncovered: 2, score: 5 / 6, violations: 1,
-      outcomes: [{ outcome: SURVIVED, site: { category: 'constant' } }, { outcome: KILLED, site: { category: 'boundary' } }],
+      outcomes: [{ outcome: SURVIVED, site: { category: 'constant' } }, { outcome: KILLED, fromCache: true, site: { category: 'boundary' } }],
     }),
-    'mutation score 83.3% (5 killed, 1 survived, 2 uncovered); survivors by category: constant=1',
+    'mutation score 83.3% (5 killed, 1 survived, 2 uncovered, 1 cached); survivors by category: constant=1',
+  );
+  assert.equal(
+    mutationSummary({
+      killed: 5, survived: 0, uncovered: 0, score: 1, violations: 0,
+      outcomes: [{ outcome: KILLED, fromCache: true, site: { category: 'boundary' } }],
+      integrityViolations: ['src/lib.js'],
+    }),
+    'mutation score 100.0% (5 killed, 0 survived, 0 uncovered, 1 cached); INTEGRITY: re-restored after run: src/lib.js',
   );
   assert.equal(mutationSummary({ summary: 'no covered mutation sites (3 uncovered)', violations: 0 }),
     'no covered mutation sites (3 uncovered)');
