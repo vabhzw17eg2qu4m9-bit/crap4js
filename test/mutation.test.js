@@ -20,6 +20,7 @@ import {
   verdict,
 } from '../src/mutation.js';
 import { main } from '../src/cli.js';
+import { extractMethodsWithNodes } from '../src/complexity.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CLI = path.resolve(__dirname, '..', 'src', 'cli.js');
@@ -123,6 +124,8 @@ test('parseMutationArgs: upstream defaults, repeatable operators and exclude', (
     exclude: [],
     cache: true,
     testArgs: ['--test'],
+    diffBase: null,
+    scopeTests: false,
     paths: [],
   });
   const opts = parseMutationArgs([
@@ -219,7 +222,7 @@ test('hangs', () => { setInterval(() => {}, 10_000); });
     writeCoverage(hanging, { 'loopy.js': coverageEntry('loopy.js', [1]) });
     const sites = detectSites(readFileSync(path.join(hanging, 'src/loopy.js'), 'utf8'), '.js');
     sites.forEach((s) => { s.file = path.join(hanging, 'src/loopy.js'); });
-    const { outcomes } = runEngine(hanging, sites, 1_000, runMutantTests);
+    const { outcomes } = runEngine(hanging, sites, 1_000, (r, ms) => runMutantTests(r, ms));
     assert.equal(outcomes[0].outcome, TIMEOUT);
     assert.equal(readFileSync(path.join(hanging, 'src/loopy.js'), 'utf8'), 'export const forever = 1;\n');
     cleanup(hanging);
@@ -235,7 +238,7 @@ test('engine: real mutants — five killed, one survived, file restored after ev
     const sites = detectSites(SIGN_SRC, '.js');
     assert.equal(sites.length, 6);
     sites.forEach((s) => { s.file = file; });
-    const { outcomes, integrityViolations } = runEngine(root, sites, 60_000, runMutantTests);
+    const { outcomes, integrityViolations } = runEngine(root, sites, 60_000, (r, ms) => runMutantTests(r, ms));
     assert.equal(outcomes.filter((o) => o.outcome === KILLED).length, 5);
     assert.equal(outcomes.filter((o) => o.outcome === SURVIVED).length, 1);
     assert.equal(outcomes.find((o) => o.outcome === SURVIVED).site.original, '0');
@@ -332,7 +335,7 @@ test('retries', () => assert.equal(RETRIES, 0));
     const sites = detectSites(readFileSync(file, 'utf8'), '.js');
     sites.forEach((s) => { s.file = file; });
     assert.equal(sites.length, 3); // `0`, `!==`, `0`
-    const { outcomes } = runEngine(root, sites, 60_000, runMutantTests);
+    const { outcomes } = runEngine(root, sites, 60_000, (r, ms) => runMutantTests(r, ms));
     assert.equal(outcomes.length, 3);
     assert.ok(outcomes.every((o) => o.outcome === KILLED), 'every mutant killed');
   } finally {
@@ -414,4 +417,278 @@ test('mutationSummary formats the pass, fail, skip, and integrity lines', () => 
   );
   assert.equal(mutationSummary({ summary: 'no covered mutation sites (3 uncovered)', violations: 0 }),
     'no covered mutation sites (3 uncovered)');
+});
+
+// ---------------------------------------------------------------------------
+// Diff-scoped execution + scope_tests (port of crap4dart 8228585)
+
+test('parseMutationArgs: --diff-base and --scope-tests flags', () => {
+  assert.equal(parseMutationArgs(['--diff-base', 'origin/main']).diffBase, 'origin/main');
+  assert.equal(parseMutationArgs(['--diff-base=HEAD~1']).diffBase, 'HEAD~1');
+  assert.equal(parseMutationArgs(['--scope-tests']).scopeTests, true);
+  assert.equal(parseMutationArgs(['--scope-tests', '--no-scope-tests']).scopeTests, false);
+  assert.equal(parseMutationArgs(['--no-scope-tests']).scopeTests, false);
+  assert.throws(() => parseMutationArgs(['--diff-base=']), /--diff-base requires a non-empty git ref/);
+});
+
+// keeper (lines 1-3) + drifter (lines 5-7): the diff-scoping fixture.
+const PAIR_SRC = `export function keeper(n) {
+  return n > 0 ? 1 : -1;
+}
+
+export function drifter(n) {
+  return n > 0 ? 2 : -2;
+}
+`;
+
+// Per-mutant runner that records every invocation's resolved arguments
+// and returns outcomes from `script` (call number 1-based).
+function scriptedRunner(script = () => KILLED) {
+  const argSets = [];
+  return {
+    get calls() {
+      return argSets.length;
+    },
+    get argSets() {
+      return argSets;
+    },
+    run: (_root, _timeoutMs, testArgs) => {
+      argSets.push(testArgs);
+      return script(argSets.length);
+    },
+  };
+}
+
+// The name of the method whose span contains `offset`, or null.
+function methodNamed(methods, offset) {
+  return methods.find((m) => offset >= m.node.start && offset <= m.node.end)?.name ?? null;
+}
+
+test('mutationViolations: diff scoping executes only the mutants of changed methods', () => {
+  const root = project({ 'src/pair.js': PAIR_SRC });
+  writeCoverage(root, { 'pair.js': coverageEntry('pair.js', [2, 6]) });
+  try {
+    const file = path.join(root, 'src/pair.js');
+    const all = detectSites(PAIR_SRC, '.js');
+    const methods = extractMethodsWithNodes(PAIR_SRC, { ext: '.js' });
+    const keeperSites = all.filter((s) => methodNamed(methods, s.offset) === 'keeper').length;
+    // keeper (`1`/`-1` mutate) has 6 sites; drifter (`2`/`-2` are not
+    // bare 0/1 lexemes — only its `>` rows and `0` mutate) has 3.
+    assert.equal(all.length, 9);
+    assert.equal(keeperSites, 6);
+
+    // Without a diff both methods' sites execute.
+    const full = scriptedRunner();
+    const fullRun = mutationViolations([file], root, parseMutationArgs(['--no-cache']), { runner: full.run });
+    assert.equal(full.calls, 9);
+    assert.equal(fullRun.killed, 9);
+
+    // The diff marks ONLY line 3 — keeper's closing brace: inside
+    // keeper's method range, outside drifter's, and not a site line
+    // itself — so the intersection is method-level, not line-level.
+    const scoped = scriptedRunner();
+    const opts = { ...parseMutationArgs(['--no-cache']), diffLines: new Map([['src/pair.js', new Set([3])]]) };
+    const scopedRun = mutationViolations([file], root, opts, { runner: scoped.run });
+    assert.equal(scoped.calls, keeperSites);
+    assert.ok(scopedRun.outcomes.every((o) => o.site.method === 'keeper'), 'only keeper mutants ran');
+    assert.equal(scopedRun.killed, keeperSites);
+    assert.equal(scopedRun.uncovered, 0, 'diff-filtered sites are neither executed nor counted');
+    assert.equal(scopedRun.scopedCount, 0, 'diff scoping is not test scoping');
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('mutationViolations: scope_tests derives the test files and caches scoped kills as regular kills', () => {
+  // src/lib.js derives test/src/lib.test.js and test/lib.test.js; the
+  // second exists (signProject's test/sign.test.js matches nothing).
+  const root = signProject({ 'test/lib.test.js': 'export const unused = true;\n' });
+  try {
+    const scoped = scriptedRunner();
+    const run1 = mutationViolations([path.join(root, 'src/lib.js')], root, parseMutationArgs(['--scope-tests']), { runner: scoped.run });
+    assert.equal(scoped.calls, 6);
+    for (const args of scoped.argSets) assert.deepEqual(args, ['--test', 'test/lib.test.js']);
+    assert.equal(run1.scopedCount, 6);
+    assert.equal(run1.confirmedCount, 0);
+    assert.equal(run1.killed, 6);
+
+    // A scoped kill is monotone: without scoping the same kills replay
+    // from the cache — the meta fingerprint deliberately ignores
+    // scope_tests, so nothing re-executes.
+    const replay = scriptedRunner(() => {
+      throw new Error('scoped kill must be replayed, not re-executed');
+    });
+    const run2 = mutationViolations([path.join(root, 'src/lib.js')], root, parseMutationArgs([]), { runner: replay.run });
+    assert.equal(replay.calls, 0);
+    assert.equal(run2.killed, 6);
+    assert.ok(run2.outcomes.every((o) => o.fromCache));
+  } finally {
+    cleanup(root);
+  }
+});
+
+// One-site fixture: src/ok.js holds exactly one mutation site (the unary
+// row deletes the `!` — no constants, no comparison rows), inside method
+// `ok` so the site has a cache identity. BOTH derived test-file
+// candidates exist.
+function oneSiteProject() {
+  const root = project({
+    'src/ok.js': 'export function ok(n) {\n  return !n;\n}\n',
+    'test/src/ok.test.js': 'export const marker = 1;\n',
+    'test/ok.test.js': 'export const marker = 1;\n',
+  });
+  writeCoverage(root, { 'ok.js': coverageEntry('ok.js', [2]) });
+  return root;
+}
+
+test('scope_tests: a scoped survivor is re-confirmed once; only the confirmed outcome is reported and cached', () => {
+  const root = oneSiteProject();
+  try {
+    // Scoped run survives, the full-invocation confirmation kills it.
+    const runner = scriptedRunner((call) => (call === 1 ? SURVIVED : KILLED));
+    const r = mutationViolations([path.join(root, 'src/ok.js')], root, parseMutationArgs(['--scope-tests']), { runner: runner.run });
+    assert.deepEqual(runner.argSets, [
+      ['--test', 'test/src/ok.test.js', 'test/ok.test.js'],
+      ['--test'],
+    ]);
+    assert.equal(r.scopedCount, 1);
+    assert.equal(r.confirmedCount, 1);
+    assert.equal(r.killed, 1);
+    assert.equal(r.survived, 0);
+    assert.deepEqual(r.violations, []);
+
+    // The confirmed kill is cached as a regular kill — a follow-up run
+    // replays it without executing anything.
+    const replay = scriptedRunner(() => {
+      throw new Error('confirmed kill must be replayed, not re-executed');
+    });
+    const r2 = mutationViolations([path.join(root, 'src/ok.js')], root, parseMutationArgs([]), { runner: replay.run });
+    assert.equal(replay.calls, 0);
+    assert.equal(r2.killed, 1);
+    assert.ok(r2.outcomes[0].fromCache);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('scope_tests: a scoped timeout is a survivor and gets re-confirmed', () => {
+  const root = oneSiteProject();
+  try {
+    const runner = scriptedRunner((call) => (call === 1 ? TIMEOUT : KILLED));
+    const r = mutationViolations([path.join(root, 'src/ok.js')], root, parseMutationArgs(['--scope-tests']), { runner: runner.run });
+    assert.equal(runner.calls, 2);
+    assert.deepEqual(runner.argSets[1], ['--test']);
+    assert.equal(r.killed, 1);
+    assert.equal(r.confirmedCount, 1);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('scope_tests: a confirmed survivor stays a survivor and is never cached', () => {
+  const root = oneSiteProject();
+  try {
+    const runner = scriptedRunner(() => SURVIVED);
+    const r = mutationViolations([path.join(root, 'src/ok.js')], root, parseMutationArgs(['--scope-tests']), { runner: runner.run });
+    assert.equal(runner.calls, 2, 'exactly one confirmation run');
+    assert.equal(r.survived, 1);
+    assert.equal(r.confirmedCount, 0);
+    assert.equal(r.violations.length, 1);
+    assert.equal(r.violations[0].file, 'src/ok.js');
+
+    // Survivors never replay: the cached confirmed outcome is not a kill.
+    const next = scriptedRunner(() => SURVIVED);
+    const r2 = mutationViolations([path.join(root, 'src/ok.js')], root, parseMutationArgs([]), { runner: next.run });
+    assert.equal(next.calls, 1);
+    assert.equal(r2.survived, 1);
+    assert.equal(r2.outcomes[0].fromCache, false);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('scope_tests: no derived test file falls back to the full invocation without re-confirmation', () => {
+  // signProject's suite lives at test/sign.test.js — not a derived
+  // candidate of src/lib.js (test/src/lib.test.js, test/lib.test.js).
+  const root = signProject();
+  try {
+    const runner = scriptedRunner(() => SURVIVED);
+    const r = mutationViolations([path.join(root, 'src/lib.js')], root, parseMutationArgs(['--scope-tests']), { runner: runner.run });
+    assert.equal(runner.calls, 6);
+    for (const args of runner.argSets) assert.deepEqual(args, ['--test'], 'fallback runs the full invocation');
+    assert.equal(r.scopedCount, 0, 'the fallback is not scoping');
+    assert.equal(r.confirmedCount, 0);
+    assert.equal(r.survived, 6);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('mutationSummary appends the test-scoped clause when scoping ran', () => {
+  assert.equal(
+    mutationSummary({ killed: 1, survived: 0, uncovered: 0, score: 1, violations: 0, outcomes: [{ fromCache: false }], scopedCount: 1, confirmedCount: 1 }),
+    'mutation score 100.0% (1 killed, 0 survived, 0 uncovered, 0 cached); test-scoped 1 (1 re-confirmed killed)',
+  );
+  assert.equal(
+    mutationSummary({
+      killed: 0, survived: 1, uncovered: 0, score: 0, violations: 1,
+      outcomes: [{ outcome: SURVIVED, site: { category: 'boolean' }, fromCache: false }],
+      scopedCount: 2, confirmedCount: 0,
+    }),
+    'mutation score 0.0% (0 killed, 1 survived, 0 uncovered, 0 cached); survivors by category: boolean=1; test-scoped 2 (0 re-confirmed killed)',
+  );
+});
+
+test('runMutation --diff-base executes only the changed methods mutants end-to-end', () => {
+  const keeperV = (ret) => `export function keeper(n) {
+  return n + ${ret};
+}
+
+export function drifter(n) {
+  return n > 0 ? 1 : -1;
+}
+`;
+  const root = project({
+    'src/lib.js': keeperV(2),
+    // Assertions match the CHANGED keeper (n + 1): a stale suite would
+    // fail on every mutant of the file and mask the survivor.
+    'test/lib.test.js': `import assert from 'node:assert';
+import test from 'node:test';
+import { keeper, drifter } from '../src/lib.js';
+
+test('keeper', () => {
+  assert.equal(keeper(1), 2);
+  assert.equal(keeper(-1), 0);
+});
+test('drifter', () => {
+  assert.equal(drifter(5), 1);
+  assert.equal(drifter(-5), -1);
+  assert.equal(drifter(0), -1);
+});
+`,
+  });
+  const git = (args) => spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+  git(['init', '-q']);
+  git(['-c', 'user.email=t@t', '-c', 'user.name=t', 'add', '-A']);
+  git(['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'init']);
+  // Change ONLY keeper (line 2) after the commit; drifter stays untouched.
+  writeFileSync(path.join(root, 'src/lib.js'), keeperV(1));
+  writeCoverage(root, { 'lib.js': coverageEntry('lib.js', [2, 6]) });
+  try {
+    // Full run: drifter's `0` -> `1` mutant survives (no test drives
+    // 0 < n <= 1), so the gate fails.
+    const full = runCli(root, ['mutation']);
+    assert.equal(full.status, 2);
+    assert.match(full.stdout, /1 survived/);
+
+    // Diff-scoped run: only keeper (line 2 changed) is a mutant of this
+    // change — drifter's sites are neither executed nor counted, its
+    // survivor vanishes, and keeper's kills replay from the cache the
+    // full run just wrote (same meta fingerprint).
+    const scoped = runCli(root, ['mutation', '--diff-base', 'HEAD']);
+    assert.equal(scoped.status, 0);
+    assert.match(scoped.stdout, /mutation score 100\.0% \(2 killed, 0 survived, 0 uncovered, 2 cached\)/);
+  } finally {
+    cleanup(root);
+  }
 });

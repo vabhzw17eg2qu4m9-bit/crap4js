@@ -75,12 +75,18 @@ crap4js folder-structure Flag src/ directories with loose direct files.
 crap4js mutation [--min-score N] [--max-survivors N]
                  [--timeout-seconds N] [--max-mutants N]
                  [--cache|--no-cache] [--test-args ARG]...
+                 [--diff-base REF] [--scope-tests]
                  [--operators CAT]... [--exclude GLOB]... [paths...]
                  Mutate one operator/literal at a time and re-run the
                  test suite per mutant; covered sites only, survivors
                  flagged. Killed mutants of unchanged methods are
                  replayed from .crap-mutation-cache.json (--no-cache
-                 disables); --test-args scopes the per-mutant suite.
+                 disables); --test-args scopes the per-mutant suite;
+                 --diff-base executes only the mutants of methods
+                 changed vs REF; --scope-tests narrows each mutant to
+                 its file's derived test files (scoped kills cache as
+                 kills; survivors are re-confirmed against the full
+                 suite).
 crap4js skill            Print the crap4js profiling skill for AI agents.
 ```
 
@@ -430,6 +436,27 @@ on) opt out entirely. `--test-args ARG` (repeatable, default `--test`)
 scopes the per-mutant invocation (`node <args...>`): scoping the suite is
 your responsibility — a mutant counts as killed only if the scoped suite
 would kill it.
+
+**Diff-scoped execution** (port of crap4dart 8228585): under
+`--diff-base REF` the gate runs `git diff -U0 REF` over the scanned paths
+and intersects the candidate sites with the changed lines BEFORE
+executing — method-level: a site runs only when its containing method
+intersects the diff (sites outside every method fall back to their own
+line). Everything outside the diff is not a mutant of this change and is
+neither executed nor counted, so a per-PR run pays only for the mutants
+of the changed methods. A git failure (not a repository, unknown ref) is
+a usage error (exit 1).
+
+**scope_tests** (port of crap4dart 8228585, `--scope-tests`, default
+off): each mutant's invocation is narrowed to the derived test file(s) of
+the mutated file — `src/foo/bar.js` → `test/src/foo/bar.test.js` and
+`test/foo/bar.test.js`, whichever exist — falling back to the full
+invocation when no candidate exists. A scoped kill is monotone (the
+scoped invocation is a subset of the full suite) and is cached as a
+regular kill; a scoped survivor — timeout included — is re-confirmed
+once against the full invocation, and only the confirmed outcome is
+reported and cached. The summary appends
+`; test-scoped N (M re-confirmed killed)` when scoping ran.
 
 Mutation testing runs the test suite once per mutant — expensive — so
 like every gate here it only runs when invoked as the `mutation`

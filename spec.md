@@ -646,6 +646,30 @@ the default `--test`) scope the per-mutant invocation
 strings); scoping the suite is the consumer's responsibility, since a
 mutant counts as killed only if the scoped suite would kill it.
 
+**Diff-scoped execution + scope_tests** (port of crap4dart 8228585,
+upstream spec §11.22). Under `--diff-base REF` the gate computes the
+changed lines vs the ref (`git diff -U0 REF` over the scanned paths,
+fixed argv; a git failure — not a repository, unknown ref — is a usage
+error, exit 1) and intersects the candidate sites with the changed lines
+BEFORE executing: method-level, a site runs only when its containing
+method intersects the diff (sites outside every method fall back to
+their own line); everything outside the diff is not a mutant of this
+change and is neither executed nor counted — per-PR runs pay only for
+the mutants of the changed methods. `--scope-tests` (default off)
+narrows each mutant's invocation to the derived test file(s) of the
+mutated file (`src/foo/bar.js` → `test/src/foo/bar.test.js` and
+`test/foo/bar.test.js`, whichever exist), falling back to the full
+invocation when no candidate exists. A scoped invocation is a subset of
+the full suite, so a scoped KILL is monotone — the full suite kills that
+mutant too — and is cached as a regular kill (scope_tests is
+deliberately NOT part of the cache meta fingerprint; cached kills stay
+valid no matter how the invocation was scoped). A scoped survivor —
+timeout included — is NOT monotone (the scoped run may omit the killing
+test), so it is re-confirmed ONCE against the full invocation and only
+the confirmed outcome is reported and cached. The mutant test runner
+receives the resolved per-site invocation arguments; the summary appends
+`; test-scoped N (M re-confirmed killed)` when scoping ran.
+
 ### not ported from 0.7–0.9 (no crap4js equivalent)
 
 - `broken_goldens` gate + tofu detector + `goldens-guard` command —

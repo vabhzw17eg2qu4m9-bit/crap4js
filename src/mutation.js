@@ -20,7 +20,15 @@
 // disabled by default). The digest-incremental cache (crap4dart 16d9c4c,
 // src/mutationCache.js) replays killed mutants of unchanged methods so
 // repeat runs cost only the survivors; `--no-cache` opts out,
-// `--test-args` scopes the per-mutant suite.
+// `--test-args` scopes the per-mutant suite. Diff-scoped execution +
+// scope_tests (crap4dart 8228585): `--diff-base REF` intersects the
+// candidate sites with the changed lines BEFORE executing (method-level —
+// a site runs only when its containing method intersects the diff), and
+// `--scope-tests` narrows each mutant's suite to the derived test file(s)
+// of the mutated file. A scoped kill is monotone (the scoped invocation
+// is a subset of the full suite) and caches as a regular kill; a scoped
+// survivor — timeout included — is re-confirmed once against the full
+// invocation, and only the confirmed outcome is reported and cached.
 //
 // Dart-only rows adapted to JS: `/` → `%` (upstream `/` → `~/`, Dart's
 // integer division), and `===`/`!==` join `==`/`!=` as equality rows.
@@ -33,6 +41,7 @@ import { loadCoverage } from './coverage.js';
 import { globToRegExp } from './bannedImports.js';
 import { gateFiles, isTestPath, toRelPath } from './files.js';
 import { applyGateArg, runCheck } from './gateCommon.js';
+import { diffIntersects, gitChangedLines } from './diffLines.js';
 import { MUTATION_CACHE_FILE_NAME, MutationCache, cacheMetaCurrent, fnv1a64Hex, methodsKey } from './mutationCache.js';
 
 const DEFAULT_MIN_SCORE = 0.8;
@@ -44,6 +53,8 @@ const DEFAULT_COVERAGE = 'coverage/coverage-final.json';
 // upstream's `test_args` default `['test']` for `dart test`.
 const DEFAULT_TEST_ARGS = ['--test'];
 const DEFAULT_CACHE = true;
+// Per-mutant test scoping (upstream `scope_tests`, default false).
+const DEFAULT_SCOPE_TESTS = false;
 
 // Operator categories of the `mutation` gate, in stable order (upstream
 // `mutationOperatorCategories`). `--operators` accepts any subset.
@@ -261,44 +272,101 @@ function isCovered(site, hits, methods) {
  * (counted killed, marked `fromCache`); survivors are always re-executed,
  * and the merged cache is persisted after the run.
  *
+ * `testArgsFor` (test scoping, crap4dart 8228585) may resolve narrower
+ * per-site invocation arguments; returning null runs the full `testArgs`.
+ * A scoped invocation is a SUBSET of the full suite, so a scoped kill is
+ * monotone — the full suite kills that mutant too — and is cached as a
+ * regular kill. Scoped survival is NOT monotone (the scoped run may omit
+ * the killing test), so every scoped survivor is re-executed once against
+ * `testArgs` before the outcome is final (counted in `confirmedCount`
+ * when the confirmation kills the mutant).
+ *
  * Safety net (crap4dart 8b2e8e8): every file about to be mutated is
  * snapshotted before the loop and the whole tree is re-verified in an
  * outer finally — files that drifted (an out-of-band write defeating the
  * per-site restore) are re-restored and reported in
  * `integrityViolations`, even when the loop died mid-mutant.
  *
- * @returns {{outcomes: Array<{site, outcome, fromCache}>, integrityViolations: string[]}}
+ * @returns {{outcomes: Array<{site, outcome, fromCache}>, integrityViolations: string[], scopedCount: number, confirmedCount: number}}
  */
-export function runEngine(projectRoot, sites, timeoutMs, runner, caching = null) {
-  const outcomes = [];
-  const fresh = new Map();
+export function runEngine(projectRoot, sites, timeoutMs, runner, caching = null, testArgsFor = null, testArgs = DEFAULT_TEST_ARGS) {
   const originals = snapshotOriginals(sites);
+  const state = { projectRoot, timeoutMs, runner, caching, testArgsFor, testArgs, outcomes: [], fresh: new Map(), survivors: [], scopedCount: 0 };
+  let confirmedCount = 0;
   let integrityViolations = [];
   try {
-    for (const site of sites) {
-      const ref = caching?.siteMethods.get(site) ?? null;
-      const replayed = ref ? caching.cache.replayKill(ref, site) : null;
-      if (replayed) {
-        outcomes.push({ site, outcome: KILLED, fromCache: true });
-        accumulate(fresh, ref, replayed);
-        continue;
-      }
-      const outcome = executeSite(projectRoot, site, timeoutMs, runner);
-      outcomes.push({ site, outcome, fromCache: false });
-      if (ref) accumulate(fresh, ref, cachedOutcome(site, outcome, ref));
-    }
+    executeAll(sites, state);
+    confirmedCount = confirmScoped(state);
   } finally {
     integrityViolations = verifyIntegrity(originals);
   }
-  persist(caching, fresh);
-  return { outcomes, integrityViolations };
+  persist(state.caching, state.fresh);
+  return { outcomes: state.outcomes, integrityViolations, scopedCount: state.scopedCount, confirmedCount };
 }
 
-function executeSite(projectRoot, site, timeoutMs, runner) {
+// Runs every site once: cache replays, then scoped or full executions.
+// Scoped survivors (anything not killed, timeout included) are deferred to
+// confirmScoped — a scoped run may omit the killing test.
+function executeAll(sites, state) {
+  for (const site of sites) {
+    if (replayKill(site, state)) continue;
+    executeLive(site, state);
+  }
+}
+
+// Replays a cached kill of an unchanged method; false when the site must
+// be executed.
+function replayKill(site, state) {
+  const ref = state.caching?.siteMethods.get(site) ?? null;
+  const replayed = ref ? state.caching.cache.replayKill(ref, site) : null;
+  if (!replayed) return false;
+  state.outcomes.push({ site, outcome: KILLED, fromCache: true });
+  accumulate(state.fresh, ref, replayed);
+  return true;
+}
+
+// Executes one site with its resolved invocation arguments (scoped when
+// testArgsFor derives narrower ones). Scoped kills are cached directly;
+// scoped survivors are deferred for confirmation instead.
+function executeLive(site, state) {
+  const scopedArgs = state.testArgsFor ? state.testArgsFor(site) : null;
+  const outcome = executeSite(state.projectRoot, site, state.timeoutMs, state.runner, scopedArgs ?? state.testArgs);
+  state.outcomes.push({ site, outcome, fromCache: false });
+  if (scopedArgs) state.scopedCount++;
+  if (scopedArgs !== null && outcome !== KILLED) {
+    state.survivors.push(state.outcomes.length - 1);
+  } else {
+    recordOutcome(site, outcome, state);
+  }
+}
+
+// Re-runs every deferred scoped survivor against the FULL invocation;
+// only the confirmed outcome is reported and cached. Returns how many
+// confirmations killed the mutant.
+function confirmScoped(state) {
+  let confirmed = 0;
+  for (const index of state.survivors) {
+    const site = state.outcomes[index].site;
+    const outcome = executeSite(state.projectRoot, site, state.timeoutMs, state.runner, state.testArgs);
+    state.outcomes[index] = { site, outcome, fromCache: false };
+    if (outcome === KILLED) confirmed++;
+    recordOutcome(site, outcome, state);
+  }
+  return confirmed;
+}
+
+// Caches the outcome of an executed site when its method has a cache
+// identity (the confirmed outcome for re-confirmed survivors).
+function recordOutcome(site, outcome, state) {
+  const ref = state.caching?.siteMethods.get(site) ?? null;
+  if (ref) accumulate(state.fresh, ref, cachedOutcome(site, outcome, ref));
+}
+
+function executeSite(projectRoot, site, timeoutMs, runner, testArgs) {
   const original = readFileSync(site.file, 'utf8');
   writeFileSync(site.file, original.slice(0, site.offset) + site.mutant + original.slice(site.offset + site.length));
   try {
-    return runner(projectRoot, timeoutMs);
+    return runner(projectRoot, timeoutMs, testArgs);
   } finally {
     // Always restore the file, also after timeouts and errors.
     writeFileSync(site.file, original);
@@ -431,10 +499,11 @@ function survivorsByCategory(outcomes) {
 
 /**
  * The mutation gate over a file set: covered sites only, capped at
- * `max_mutants` (file order, then offset — deterministic), engine run
- * (with the digest cache session when `opts.cache` is on), verdict.
- * Skips (exit 0, empty violations) when the test command cannot be
- * spawned.
+ * `max_mutants` (file order, then offset — deterministic), diff-scoped to
+ * the changed methods when `opts.diffLines` is set, engine run (with the
+ * digest cache session when `opts.cache` is on, and with per-mutant test
+ * scoping when `opts.scopeTests` is on), verdict. Skips (exit 0, empty
+ * violations) when the test command cannot be spawned.
  */
 export function mutationViolations(files, projectRoot, opts, deps = {}) {
   const selection = selectSites(files, projectRoot, opts, loadCoverage(resolveCoverage(opts, projectRoot), projectRoot));
@@ -447,8 +516,10 @@ export function mutationViolations(files, projectRoot, opts, deps = {}) {
       projectRoot,
       selection.sites,
       opts.timeoutSeconds * 1000,
-      deps.runner ?? ((root, ms) => runMutantTests(root, ms, spawnSync, opts.testArgs)),
+      deps.runner ?? ((root, ms, args) => runMutantTests(root, ms, spawnSync, args)),
       openCache(projectRoot, opts, selection),
+      opts.scopeTests ? (site) => scopedTestArgs(projectRoot, site) : null,
+      opts.testArgs,
     );
   } catch (err) {
     if (err instanceof MutationUnavailableError) return unavailable(files.length, err.message);
@@ -458,7 +529,12 @@ export function mutationViolations(files, projectRoot, opts, deps = {}) {
   // the same stderr warning alongside the summary's INTEGRITY clause.
   warnIntegrity(engine.integrityViolations.length);
   const integrity = engine.integrityViolations.map((f) => toRelPath(f, projectRoot));
-  return { ...verdict(engine.outcomes, selection.uncovered, opts, integrity), checked: files.length };
+  return {
+    ...verdict(engine.outcomes, selection.uncovered, opts, integrity),
+    checked: files.length,
+    scopedCount: engine.scopedCount,
+    confirmedCount: engine.confirmedCount,
+  };
 }
 
 // Opens the digest cache when `cache` is enabled: loads the file at the
@@ -474,6 +550,21 @@ function openCache(projectRoot, opts, selection) {
   };
 }
 
+// Derives the scoped test invocation for [site] from the project layout
+// convention: `src/…` mirrored under `test/` with and without the `src/`
+// segment (`src/foo/bar.js` → `test/src/foo/bar.test.js` and
+// `test/foo/bar.test.js`). Returns null when no candidate test file
+// exists — the caller runs the full invocation instead (the fallback is
+// not scoping: no re-confirmation, not counted in scopedCount).
+function scopedTestArgs(projectRoot, site) {
+  const rel = site.rel;
+  if (!rel.startsWith('src/')) return null;
+  const base = rel.slice('src/'.length, rel.length - path.extname(rel).length);
+  const candidates = [`test/src/${base}.test.js`, `test/${base}.test.js`];
+  const existing = candidates.filter((c) => existsSync(path.join(projectRoot, c)));
+  return existing.length === 0 ? null : ['--test', ...existing];
+}
+
 function warnIntegrity(count) {
   if (count === 0) return;
   process.stderr.write(
@@ -483,14 +574,19 @@ function warnIntegrity(count) {
 
 // Covered sites across the file set, capped at max_mutants (file order,
 // then offset — the cap is deterministic); uncovered sites only count.
-// Also collects the cache identities: every scanned method's live key and,
-// per covered site, its containing method's key + digest + start.
+// In a diff-scoped run (opts.diffLines) only sites whose containing
+// method intersects the changed lines are kept at all — everything
+// outside the diff is not a mutant of this change and is neither
+// executed nor counted. Also collects the cache identities: every
+// scanned method's live key and, per covered site, its containing
+// method's key + digest + start.
 function selectSites(files, projectRoot, opts, coverage) {
   const scan = {
     projectRoot,
     enabled: new Set(opts.operators),
     maxMutants: opts.maxMutants,
     coverage,
+    diff: opts.diffLines,
     covered: [],
     siteMethods: new Map(),
     liveKeys: new Set(),
@@ -515,6 +611,7 @@ function scanFileSites(file, scan) {
     s.file = file;
     s.rel = rel;
     s.method = method?.name ?? null;
+    if (!inDiff(scan, rel, s, method)) continue;
     if (scan.covered.length >= scan.maxMutants) break;
     if (isCovered(s, hits, methods)) {
       scan.covered.push(s);
@@ -524,6 +621,16 @@ function scanFileSites(file, scan) {
     }
   }
   return uncovered;
+}
+
+// Whether the site's containing method intersects the changed lines of a
+// diff-scoped run (method-level: a site runs when any line of its method
+// changed, even when its own line did not); sites outside every method
+// fall back to their own line. No diff → everything runs.
+function inDiff(scan, rel, site, method) {
+  if (!scan.diff) return true;
+  if (method) return diffIntersects(scan.diff, rel, method.startLine, method.endLine);
+  return diffIntersects(scan.diff, rel, site.line, site.line);
 }
 
 // The method whose node span contains `offset`, or null.
@@ -573,14 +680,19 @@ export function mutationSummary(r) {
   if (r.summary) return r.summary;
   const cached = (r.outcomes ?? []).filter((o) => o.fromCache).length;
   const base = `mutation score ${(r.score * 100).toFixed(1)}% (${r.killed} killed, ${r.survived} survived, ${r.uncovered} uncovered, ${cached} cached)`;
+  // How much scoping actually ran: sites narrowed by scope_tests and how
+  // many of their first-run survivors the full-invocation re-run killed.
+  const scoped = (r.scopedCount ?? 0) > 0
+    ? `; test-scoped ${r.scopedCount} (${r.confirmedCount} re-confirmed killed)`
+    : '';
   const integrity = (r.integrityViolations ?? []).length === 0
     ? ''
     : `; INTEGRITY: re-restored after run: ${r.integrityViolations.join(', ')}`;
-  if (r.violations === 0) return base + integrity;
+  if (r.violations === 0) return base + scoped + integrity;
   const byCategory = Object.entries(survivorsByCategory(r.outcomes))
     .map(([k, v]) => `${k}=${v}`)
     .join(', ');
-  return `${base}; survivors by category: ${byCategory}${integrity}`;
+  return `${base}; survivors by category: ${byCategory}${scoped}${integrity}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -595,18 +707,26 @@ const VALUE_FLAGS = {
   '--exclude': 'exclude',
   '--operators': 'operators',
   '--test-args': 'testArgs',
+  '--diff-base': 'diffBase',
 };
 const NUMBER_FLAGS = new Set(['--min-score', '--max-survivors', '--timeout-seconds', '--max-mutants']);
-// Boolean switch pair (no value): `--no-cache` opts out of the digest
-// cache, `--cache` turns it back on.
-const BOOL_FLAGS = { '--cache': true, '--no-cache': false };
+// Boolean switch pairs (no value) → [opts key, value]: `--no-cache` opts
+// out of the digest cache, `--cache` turns it back on; `--scope-tests`
+// enables per-mutant test scoping, `--no-scope-tests` turns it back off.
+const BOOL_FLAGS = {
+  '--cache': ['cache', true],
+  '--no-cache': ['cache', false],
+  '--scope-tests': ['scopeTests', true],
+  '--no-scope-tests': ['scopeTests', false],
+};
 
 /**
  * Parse `mutation` arguments into `{ minScore, maxSurvivors,
  * timeoutSeconds, maxMutants, coverage, operators, exclude, cache,
- * testArgs, paths }`. Value flags may be written `--flag VALUE` or
- * `--flag=VALUE`; `--exclude`, `--operators` and `--test-args` are
- * repeatable (test-args values append to the default `--test`).
+ * testArgs, diffBase, scopeTests, paths }`. Value flags may be written
+ * `--flag VALUE` or `--flag=VALUE`; `--exclude`, `--operators` and
+ * `--test-args` are repeatable (test-args values append to the default
+ * `--test`).
  *
  * @param {string[]} argv
  */
@@ -621,12 +741,14 @@ export function parseMutationArgs(argv) {
     exclude: [],
     cache: DEFAULT_CACHE,
     testArgs: [...DEFAULT_TEST_ARGS],
+    diffBase: null,
+    scopeTests: DEFAULT_SCOPE_TESTS,
     paths: [],
   };
   for (let i = 0; i < argv.length; i++) {
-    const bool = BOOL_FLAGS[argv[i]];
-    if (bool !== undefined) {
-      opts.cache = bool;
+    const [key, value] = BOOL_FLAGS[argv[i]] ?? [];
+    if (value !== undefined) {
+      opts[key] = value;
       continue;
     }
     i = applyGateArg(opts, argv[i], argv, i, VALUE_FLAGS, NUMBER_FLAGS);
@@ -635,6 +757,7 @@ export function parseMutationArgs(argv) {
   if (opts.operators.length === 0) opts.operators = [...OPERATOR_CATEGORIES];
   validateOperators(opts.operators);
   validateTestArgs(opts.testArgs);
+  if (opts.diffBase !== null && opts.diffBase.trim() === '') throw new Error('--diff-base requires a non-empty git ref');
   return opts;
 }
 
@@ -667,8 +790,11 @@ function scanSet(opts, projectRoot) {
 
 /**
  * The `mutation` command body. Skips (exit 0) without coverage data or a
- * test directory — mutation testing needs both. Returns exit code 2 iff
- * any covered mutant survived past the thresholds.
+ * test directory — mutation testing needs both. Under `--diff-base` the
+ * changed lines vs the ref are computed BEFORE the run (scoped to the
+ * scanned paths; a git failure surfaces as a usage error), and only the
+ * mutants of changed methods are executed. Returns exit code 2 iff any
+ * covered mutant survived past the thresholds.
  */
 export function runMutation(argv, ctx) {
   const opts = parseMutationArgs(argv);
@@ -677,10 +803,14 @@ export function runMutation(argv, ctx) {
     ctx.out.write(`mutation: skipped — ${skip}\n`);
     return 0;
   }
+  const files = scanSet(opts, ctx.cwd);
+  if (opts.diffBase !== null && files.length > 0) {
+    opts.diffLines = gitChangedLines(opts.diffBase, files.map((f) => toRelPath(f, ctx.cwd)), ctx.cwd);
+  }
   return runCheck(
     ctx,
-    scanSet(opts, ctx.cwd),
-    (files, root) => mutationViolations(files, root, opts),
+    files,
+    (fs, root) => mutationViolations(fs, root, opts),
     mutationSummary,
   );
 }
