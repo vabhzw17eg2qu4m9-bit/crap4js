@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.10.0...v0.11.0) (2026-10-11)
+
+
+### Features
+
+* **mutation:** digest-incremental cache + test_args scoping + tree-integrity check — port of upstream crap4dart 16d9c4c+8b2e8e8 ([#38](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/38)) ([196cd5e](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/196cd5e9f088d801ce85f1b672a075a2dc027a9a))
+
 ## [0.10.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.9.0...v0.10.0) (2026-10-11)
 
 
