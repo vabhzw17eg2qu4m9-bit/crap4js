@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert';
-import { formatReport } from '../src/report.js';
+import { formatReport, padLeft, padRight } from '../src/report.js';
 
 test('renders header, separator, rows, and summary', () => {
   const metrics = [
@@ -149,4 +149,76 @@ test('no parse-failure line when parseFailures omitted or empty', () => {
     const out = formatReport(metrics, opts);
     assert.ok(!out.includes('Parse failures'));
   }
+});
+
+// --- mutation-survivor triage (upstream crap4dart 862acc1 practice) ---
+
+function metric(name, file, startLine, crapScore) {
+  return {
+    methodName: name,
+    file,
+    startLine,
+    complexity: 2,
+    coverage: crapScore == null ? null : 1,
+    crapScore,
+  };
+}
+
+function dataRows(out, n) {
+  return out.split('\n').slice(4, 4 + n).map((l) => l.trim().split(/\s+/)[0]);
+}
+
+test('threshold comparison is strict: a tie at the threshold passes', () => {
+  assert.match(formatReport([metric('m', 'src/m.js', 1, 8.0)]),
+    /Max CRAP: 8\.0 \(threshold 8\.0\) — passed/);
+  assert.match(formatReport([metric('m', 'src/m.js', 1, 8.0)], { threshold: 8.0 }),
+    /Max CRAP: 8\.0 \(threshold 8\.0\) — passed/);
+  assert.match(formatReport([metric('m', 'src/m.js', 1, 8.0)], { threshold: 7.9 }),
+    /Max CRAP: 8\.0 \(threshold 7\.9\) — FAILED/);
+});
+
+test('an explicit threshold below the 8.0 default is honored', () => {
+  const out = formatReport([metric('m', 'src/m.js', 1, 6.0)], { threshold: 4.0 });
+  assert.match(out, /Max CRAP: 6\.0 \(threshold 4\.0\) — FAILED/);
+});
+
+test('numeric rows precede N/A rows regardless of input order', () => {
+  const na = metric('naRow', 'src/a.js', 3, null);
+  const six = metric('sixRow', 'src/b.js', 1, 6.0);
+  const two = metric('twoRow', 'src/c.js', 2, 2.0);
+  for (const input of [[na, six, two], [six, na, two], [two, six, na]]) {
+    assert.deepEqual(dataRows(formatReport(input), 3), ['sixRow', 'twoRow', 'naRow']);
+  }
+});
+
+test('equal CRAP sorts by file then line, never by input order', () => {
+  // Different files, equal CRAP: file order wins even from reversed input.
+  assert.deepEqual(
+    dataRows(formatReport([
+      metric('inB', 'src/b.js', 1, 4.0),
+      metric('inA', 'src/a.js', 1, 4.0),
+    ]), 2),
+    ['inA', 'inB'],
+  );
+  // Same file, equal CRAP: startLine order wins from reversed input.
+  assert.deepEqual(
+    dataRows(formatReport([
+      metric('line2', 'src/x.js', 2, 4.0),
+      metric('line1', 'src/x.js', 1, 4.0),
+    ]), 2),
+    ['line1', 'line2'],
+  );
+  // A falsy startLine counts as line 0, from either input position.
+  const zero = metric('atZero', 'src/x.js', 0, 4.0);
+  const one = metric('atOne', 'src/x.js', 1, 4.0);
+  assert.deepEqual(dataRows(formatReport([one, zero]), 2), ['atZero', 'atOne']);
+  assert.deepEqual(dataRows(formatReport([zero, one]), 2), ['atZero', 'atOne']);
+});
+
+test('padLeft/padRight pad exactly to the requested width', () => {
+  assert.equal(padLeft('ab', 4), '  ab');
+  assert.equal(padLeft('abc', 3), 'abc');
+  assert.equal(padLeft('toolong', 3), 'toolong');
+  assert.equal(padRight('ab', 4), 'ab  ');
+  assert.equal(padRight('abc', 3), 'abc');
 });

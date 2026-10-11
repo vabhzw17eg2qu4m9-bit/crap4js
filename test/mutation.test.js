@@ -140,6 +140,11 @@ test('parseMutationArgs: upstream defaults, repeatable operators and exclude', (
   assert.deepStrictEqual(opts.operators, ['boundary', 'equality']);
   assert.deepStrictEqual(opts.exclude, ['**.gen.js']);
   assert.deepStrictEqual(opts.paths, ['src/a.js']);
+  // `--coverage` overrides its scalar default (both spellings) instead of
+  // accumulating — pre-fix the default string was spread char-by-char and
+  // the gate died on `path.resolve` with the resulting array.
+  assert.equal(parseMutationArgs(['--coverage', 'cov/main.json']).coverage, 'cov/main.json');
+  assert.equal(parseMutationArgs(['--coverage=cov/main.json']).coverage, 'cov/main.json');
 });
 
 test('parseMutationArgs: unknown category and invalid number are usage errors', () => {

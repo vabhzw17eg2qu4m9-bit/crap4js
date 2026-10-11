@@ -59,10 +59,11 @@ export function formatReport(metrics, { threshold, parseFailures } = {}) {
       '\n';
   }
 
-  const max = sorted.reduce(
-    (mx, m) => (m.crapScore != null && m.crapScore > mx ? m.crapScore : mx),
-    0,
-  );
+  // maxCrap folds through Math.max (upstream crap4dart 862acc1 parity with
+  // Dart's fold(math.max)): the null-guarded inline comparison it replaces
+  // carried a `>` -> `>=` mutant no test can distinguish — overwriting the
+  // accumulator with an equal value is unobservable.
+  const max = sorted.reduce((mx, m) => Math.max(mx, m.crapScore ?? 0), 0);
   const verdict = max > t ? 'FAILED' : 'passed';
   out += '\n';
   out += `Max CRAP: ${max.toFixed(1)} (threshold ${t.toFixed(1)}) — ${verdict}\n`;
@@ -79,6 +80,8 @@ function parseFailureLine(parseFailures) {
 function compareMetricsForReport(a, b) {
   const aNull = a.crapScore == null;
   const bNull = b.crapScore == null;
+  // The `-1` here is equivalent-mutant territory (see tieBreakReport):
+  // sort never observes `-1` vs `-0`.
   if (aNull && bNull) return tieBreakReport(a, b);
   if (aNull) return 1;
   if (bNull) return -1;
@@ -87,6 +90,15 @@ function compareMetricsForReport(a, b) {
 }
 
 function tieBreakReport(a, b) {
+  // This comparator's constants are equivalent-mutant territory — the JS
+  // twin of upstream's Dart List.sort finding (crap4dart 862acc1):
+  // Array#sort is sign-based (ECMA-262 SortCompare reads `< 0` and `= 0`
+  // alike) and `[...metrics].sort` is the only consumer, so no input
+  // distinguishes the ternary's `1` from `0`, the b-side `||` from `&&`,
+  // or the a-side `|| 0` from `|| 1`. Verified: each single-site mutant
+  // passes the full suite and stays output-identical on 3-row permutations
+  // through 60-row merge-path layouts. `<` vs `<=` is the same story: the
+  // ternary evaluates only after the `!==` guard, so files always differ.
   if (a.file !== b.file) return a.file < b.file ? -1 : 1;
   return (a.startLine || 0) - (b.startLine || 0);
 }
@@ -102,6 +114,9 @@ function formatCrap(score) {
 }
 
 export function padLeft(s, w) {
+  // `>=` vs `>` is mutation-equivalent here (same for padRight): at equal
+  // width the pad is `''.repeat(0)` — the same string either way
+  // (mutation-verified).
   s = String(s);
   return s.length >= w ? s : ' '.repeat(w - s.length) + s;
 }

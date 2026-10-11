@@ -239,3 +239,18 @@ test('loadCoverage still drops entries genuinely outside the project root', () =
     rmSync(base, { recursive: true, force: true });
   }
 });
+
+// --- mutation-survivor triage (upstream crap4dart 862acc1 practice) ---
+
+test('statements with a null line boundary are never intersecting', () => {
+  const fileCoverage = {
+    statementMap: {
+      broken: { start: { line: null }, end: { line: 5 } },
+      good: { start: { line: 2 }, end: { line: 3 } },
+    },
+    s: { broken: 0, good: 1 },
+  };
+  // Only the well-formed statement counts: the null-boundary entry must be
+  // skipped by the guard, not scored as an uncovered intersecting statement.
+  assert.equal(coverageForMethod(fileCoverage, 1, 10), 1);
+});

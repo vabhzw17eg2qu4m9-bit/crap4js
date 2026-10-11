@@ -97,6 +97,9 @@ export function compareMetrics(a, b) {
 }
 
 function tieBreak(a, b) {
+  // `<` vs `<=` is mutation-equivalent here: the ternary evaluates only
+  // after the `!==` guard, so the files always differ when it runs
+  // (mutation-verified — both spellings pass the full suite).
   if (a.file !== b.file) return a.file < b.file ? -1 : 1;
   return a.startLine - b.startLine;
 }

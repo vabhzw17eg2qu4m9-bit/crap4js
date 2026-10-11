@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert';
-import { analyze } from '../src/analyzer.js';
+import { analyze, compareMetrics } from '../src/analyzer.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -136,4 +136,41 @@ test('parse failures are collected and surfaced alongside metrics', () => {
   assert.equal(metrics.length, 1);
   assert.equal(metrics[0].methodName, 'ok');
   assert.deepEqual(parseFailures, ['src/broken.js']);
+});
+
+// --- mutation-survivor triage (upstream crap4dart 862acc1 practice) ---
+
+function cm(file, startLine, crapScore) {
+  return {
+    methodName: `m_${file}_${startLine}`,
+    file,
+    startLine,
+    complexity: 1,
+    coverage: crapScore == null ? null : 1,
+    crapScore,
+  };
+}
+
+test('compareMetrics: numeric CRAP precedes N/A from either side', () => {
+  const scored = cm('src/b.js', 1, 2.0);
+  const na = cm('src/b.js', 2, null);
+  assert.equal(compareMetrics(scored, na), -1);
+  assert.equal(compareMetrics(na, scored), 1);
+  // The N/A entry in the alphabetically earlier file: the null-vs-numeric
+  // decision must not fall through to the file tie-break.
+  const naFirst = cm('src/a.js', 1, null);
+  const scoredLater = cm('src/b.js', 2, 2.0);
+  assert.equal(compareMetrics(naFirst, scoredLater), 1);
+  assert.equal(compareMetrics(scoredLater, naFirst), -1);
+});
+
+test('compareMetrics: equal CRAP tie-breaks by file, then startLine', () => {
+  const fileA = cm('src/a.js', 1, 4.0);
+  const fileB = cm('src/b.js', 9, 4.0);
+  assert.equal(compareMetrics(fileA, fileB), -1);
+  assert.equal(compareMetrics(fileB, fileA), 1);
+  const line1 = cm('src/x.js', 1, 4.0);
+  const line2 = cm('src/x.js', 2, 4.0);
+  assert.equal(compareMetrics(line1, line2), -1);
+  assert.equal(compareMetrics(line2, line1), 1);
 });

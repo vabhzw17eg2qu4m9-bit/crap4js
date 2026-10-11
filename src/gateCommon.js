@@ -40,12 +40,15 @@ export function applyGateArg(opts, arg, argv, i, valueFlags, numberFlags = null)
 }
 
 // Stores one flag value: number flags are validated scalars, every other
-// flag accumulates into an array (all gate flags are repeatable).
+// flag accumulates into an array (all gate flags are repeatable) — unless
+// its current value is already a scalar (a default like the mutation
+// gate's coverage path): then the flag simply overrides it.
 function applyGateValue(opts, key, head, value, ret, numberFlags) {
   if (value === undefined) throw new Error(`${head} requires a value`);
+  const cur = opts[key];
   opts[key] = numberFlags?.has(head)
     ? toGateNumber(head, value)
-    : [...(opts[key] ?? []), value];
+    : Array.isArray(cur) ? [...cur, value] : value;
   return ret;
 }
 
