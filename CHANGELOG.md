@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.9.0...v0.10.0) (2026-10-11)
+
+
+### Features
+
+* **gates:** mutation gate — port of upstream crap4dart c865ec3 ([#35](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/35)) ([5037d73](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/5037d73851c46ec7710e0a26d1de8e4f80f6b979))
+
 ## [0.9.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.8.1...v0.9.0) (2026-09-30)
 
 
