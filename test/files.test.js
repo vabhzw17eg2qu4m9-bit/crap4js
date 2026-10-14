@@ -205,11 +205,12 @@ test('testFiles default: <root>/test/ walk plus colocated tests under src/', () 
     fs.writeFileSync(path.join(root, 'src', 'app.js'), '');
     fs.writeFileSync(path.join(root, 'src', 'colocated.test.js'), '');
     const rel = testFiles([], root).map((f) => path.relative(root, f));
+    // path.join keeps the expectation native-separator shaped on Windows.
     assert.deepEqual(rel, [
-      'src/colocated.test.js',
-      'test/a.test.js',
-      'test/helper.js',
-      'test/unit/b.test.js',
+      path.join('src', 'colocated.test.js'),
+      path.join('test', 'a.test.js'),
+      path.join('test', 'helper.js'),
+      path.join('test', 'unit', 'b.test.js'),
     ]);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -222,7 +223,7 @@ test('testFiles explicit path keeps test files verbatim', () => {
     fs.mkdirSync(path.join(root, 'test'));
     fs.writeFileSync(path.join(root, 'test', 'a.test.js'), '');
     const rel = testFiles(['test/a.test.js'], root).map((f) => path.relative(root, f));
-    assert.deepEqual(rel, ['test/a.test.js']);
+    assert.deepEqual(rel, [path.join('test', 'a.test.js')]);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

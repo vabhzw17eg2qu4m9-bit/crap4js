@@ -61,6 +61,7 @@ import { runFolderStructure } from './folderStructure.js';
 import { runMutation } from './mutation.js';
 import { parseProfileArgs, runProfile } from './profile.js';
 import { runSkill } from './skill.js';
+import { isMain } from './mainGuard.js';
 
 const DEFAULT_THRESHOLD = 8.0;
 const DEFAULT_COVERAGE = 'coverage/coverage-final.json';
@@ -316,8 +317,6 @@ function reportVerdict(metrics, threshold, ctx) {
   return 0;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  process.exit(main(process.argv.slice(2)));
-}
+if (isMain(import.meta.url)) process.exit(main(process.argv.slice(2)));
 
 export { main, parseArgs, usage };

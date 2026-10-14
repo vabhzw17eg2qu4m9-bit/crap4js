@@ -33,6 +33,38 @@ jobs:
         # per-method Cov% and Max CRAP. Mirrors the crap4py CI self-analysis.
         run: node src/cli.js --coverage coverage/coverage-final.json
 
+  # Issue #42: the CLI entry guard only misfired on non-Linux invocation
+  # shapes (macOS /tmp -> /private/tmp symlinked prefixes, Windows
+  # file://C:\ URLs), which ubuntu-only CI could never see. The same suite
+  # must run on all three platforms.
+  quality-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Test with coverage
+        run: npx c8 --reporter=json --reporter=text --include='src/**/*.js' node --test
+      - name: Self-analyze (crap4js on its own source)
+        run: node src/cli.js --coverage coverage/coverage-final.json
+
+  quality-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Test with coverage
+        run: npx c8 --reporter=json --reporter=text --include='src/**/*.js' node --test
+      - name: Self-analyze (crap4js on its own source)
+        run: node src/cli.js --coverage coverage/coverage-final.json
+
   commit-badges:
     needs: quality
     # Push-only + bot-gated: never runs on pull_request, so it can never be
