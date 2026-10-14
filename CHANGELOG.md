@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.1](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.12.0...v0.12.1) (2026-10-14)
+
+
+### Bug Fixes
+
+* recognize symlinked and Windows invocation paths in main-module guard ([#43](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/43)) ([fa0d2c4](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/fa0d2c4c23d48cc955e0a7b10b60ce565d20a5a4))
+
 ## [0.12.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.11.0...v0.12.0) (2026-10-11)
 
 
