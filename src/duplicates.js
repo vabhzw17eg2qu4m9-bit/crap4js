@@ -1,23 +1,32 @@
 // `duplicates` subcommand: token-based duplicate-code detection. Port of
 // crap4dart's duplication gate (spec §11.11) including the per-gate
 // `sources` union (commit dc64e9c): every scanned file is tokenized
-// (comments skipped, raw lexemes kept), and any sliding window of
-// `--min-tokens` tokens spanning at least `--min-lines` source lines that
-// appears twice or more - within or across files - marks its tokens as
-// duplicated. A file violates when its distinct duplicated lines exceed
-// `--threshold` percent of its total lines.
+// (comments skipped, raw lexemes kept) and windows of `--min-tokens`
+// tokens spanning at least `--min-lines` source lines are indexed; a
+// window appearing twice or more - within or across files - grows a
+// clone group extended to the maximal extent its occurrences share.
+// Accepted groups are non-overlapping, longest first (PMD CPD Match
+// semantics). `--report percentage` (the default) fails a file when its
+// distinct duplicated lines exceed `--threshold` percent of its total
+// lines; `--report clones` fails once per accepted clone group with all
+// occurrence locations in the message.
 //
-// Two opt-in normalizations (upstream 0599df2) extend detection to renamed
-// clones: `--ignore-locals` consistently renames function-local identifiers
-// to first-use-order placeholders, `--ignore-literals` masks string and
-// numeric literals. Detection is a union of the raw pass and the masked
+// Opt-in normalizations extend detection beyond exact copy-paste:
+// `--ignore-locals` consistently renames function-local identifiers to
+// first-use-order placeholders, `--ignore-literals` masks string and
+// numeric literals, `--ignore-identifiers` collapses every identifier to
+// one placeholder (CPD --ignore-identifiers, structure-only matching),
+// and `--ignore-imports` drops import/export directives and require()
+// calls from tokenization. `--skip-duplicate-files` analyzes a
+// token-identical file once. Detection unions the raw pass and the masked
 // pass (upstream 94299e0), so enabling `--ignore-locals` can only add
-// findings — exact copies are never lost to shifted placeholder numbering.
+// findings - exact copies are never lost to shifted placeholder numbering.
 //
-// ponytail: windows are indexed by their joined lexeme string (NUL-
-// separated, a byte no lexeme contains), not upstream's Rabin-Karp hash -
-// same windows, no collision handling; switch to rolling hashes only if
-// scan time on very large files ever matters.
+// ponytail: windows are indexed by their joined code string (NUL-
+// separated, a byte no code contains), not upstream's Rabin-Karp hash -
+// same windows, and a bucket key IS the exact window, so upstream's new
+// collision-verification pass is unnecessary by construction. Rolling
+// hashes would pay off only if scan time on very large files ever hurt.
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -35,23 +44,31 @@ const VALUE_FLAGS = {
   '--threshold': 'threshold',
   '--min-tokens': 'minTokens',
   '--min-lines': 'minLines',
+  '--report': 'report',
   '--exclude': 'exclude',
   '--source': 'source',
 };
 const NUMBER_FLAGS = new Set(['--threshold', '--min-tokens', '--min-lines']);
-// The Type-2 normalization knobs (upstream `ignore_locals`/`ignore_literals`
-// YAML keys): bare kebab-case flags, opt-in, so absent means false.
+// Violation styles (upstream `report: percentage|clones`): percentage is
+// the default, clones is the PMD CPD style - one violation per group.
+const REPORT_MODES = new Set(['percentage', 'clones']);
+// The normalization knobs (upstream flat YAML keys under the duplication
+// gate): bare kebab-case flags, opt-in, so absent means false.
 const BOOLEAN_FLAGS = {
   '--ignore-locals': 'ignoreLocals',
   '--ignore-literals': 'ignoreLiterals',
+  '--ignore-identifiers': 'ignoreIdentifiers',
+  '--ignore-imports': 'ignoreImports',
+  '--skip-duplicate-files': 'skipDuplicateFiles',
 };
 
 /**
  * Parse `duplicates` arguments into `{ threshold, minTokens, minLines,
- * exclude, source, paths }`. Value flags may be written `--flag VALUE` or
- * `--flag=VALUE`; `--exclude` and `--source` are repeatable. The boolean
- * normalization flags are bare (`--ignore-locals`, `--ignore-literals`)
- * and appear in the result only when passed — absence is their `false`.
+ * report, exclude, source, paths }`. Value flags may be written
+ * `--flag VALUE` or `--flag=VALUE`; `--exclude` and `--source` are
+ * repeatable. `--report` accepts `percentage` (the default) or `clones`.
+ * The boolean normalization flags are bare (`--ignore-locals`, ...) and
+ * appear in the result only when passed — absence is their `false`.
  *
  * @param {string[]} argv
  */
@@ -60,6 +77,7 @@ export function parseDuplicateArgs(argv) {
     threshold: DEFAULT_THRESHOLD,
     minTokens: DEFAULT_MIN_TOKENS,
     minLines: DEFAULT_MIN_LINES,
+    report: 'percentage',
     exclude: [],
     source: [],
     paths: [],
@@ -68,6 +86,9 @@ export function parseDuplicateArgs(argv) {
     const bool = BOOLEAN_FLAGS[argv[i]];
     if (bool) opts[bool] = true;
     else i = applyGateArg(opts, argv[i], argv, i, VALUE_FLAGS, NUMBER_FLAGS);
+  }
+  if (!REPORT_MODES.has(opts.report)) {
+    throw new Error(`Invalid --report: ${opts.report}`);
   }
   return opts;
 }
@@ -110,21 +131,25 @@ function scanSet(opts, projectRoot) {
 }
 
 /**
- * Duplicate detection over a file set: tokenize, mark duplicated windows,
- * and build per-file violations. Files with fewer than `minTokens` tokens
- * are skipped from the scan entirely (upstream behavior), so `checked`
- * counts only tokenized files.
+ * Duplicate detection over a file set: tokenize, accept non-overlapping
+ * clone groups longest first, then build violations — per-file percentage
+ * (default) or one per clone group (`report: 'clones'`). Files with fewer
+ * than `minTokens` tokens are skipped from the scan entirely (upstream
+ * behavior), so `checked` counts only tokenized files.
  *
  * @param {string[]} files  absolute paths.
  * @param {string} projectRoot
  * @param {{threshold: number, minTokens: number, minLines: number,
- *   ignoreLocals?: boolean, ignoreLiterals?: boolean}} opts
+ *   report?: string, ignoreLocals?: boolean, ignoreLiterals?: boolean,
+ *   ignoreIdentifiers?: boolean, ignoreImports?: boolean,
+ *   skipDuplicateFiles?: boolean}} opts
  * @returns {{violations: Array<{file, line, message}>, checked: number,
- *            checkedLines: number, dupLines: number}}
+ *            checkedLines?: number, dupLines?: number}}
  */
 export function duplicatesViolations(files, projectRoot, opts) {
   const bags = tokenizeFiles(files, projectRoot, opts);
-  markDuplicates(bags, opts.minTokens, opts.minLines, opts.ignoreLocals);
+  const groups = acceptGroups(bags, detectClones(bags, opts));
+  if (opts.report === 'clones') return clonesResult(bags, groups);
   const violations = [];
   let checkedLines = 0;
   let dupLines = 0;
@@ -142,8 +167,22 @@ export function duplicatesViolations(files, projectRoot, opts) {
 // (plus `lexeme` when a normalization mode is active) and a `dup` marker
 // added during detection; `totalLines` uses the upstream line count
 // (newlines, +1 for a trailing fragment, 0 when empty).
+//
+// Any normalization knob routes through normalizedTokens: masked values
+// for hashing, the AST for import ranges and scopes. skip_duplicate_files
+// compares masked values too, so a file differing only in comments from an
+// earlier one is skipped as well (upstream compares the same streams).
+// The minTokens floor applies before the dedup, exactly like upstream.
+const MASKING_KEYS = [
+  'ignoreLocals',
+  'ignoreLiterals',
+  'ignoreIdentifiers',
+  'ignoreImports',
+  'skipDuplicateFiles',
+];
+
 function tokenizeFiles(files, projectRoot, opts) {
-  const masked = opts.ignoreLocals || opts.ignoreLiterals;
+  const masked = MASKING_KEYS.some((key) => opts[key]);
   const bags = [];
   for (const file of files) {
     const source = readFileSync(file, 'utf8');
@@ -151,15 +190,28 @@ function tokenizeFiles(files, projectRoot, opts) {
     const tokens = masked
       ? normalizedTokens(source, ext, opts)
       : tokenizeSource(source, ext);
-    if (tokens.length >= opts.minTokens) {
-      bags.push({
-        rel: toRelPath(file, projectRoot),
-        tokens,
-        totalLines: lineCount(source),
-      });
-    }
+    if (tokens.length < opts.minTokens) continue;
+    if (isCopiedStream(bags, tokens, opts)) continue;
+    bags.push({
+      rel: toRelPath(file, projectRoot),
+      tokens,
+      totalLines: lineCount(source),
+    });
   }
   return bags;
+}
+
+// CPD --skip-duplicate-files: whether a file whose token stream equals an
+// earlier file's is dropped - a copied file is analyzed once, reported as
+// one clone group, not as N x N pairs.
+function isCopiedStream(bags, tokens, opts) {
+  return Boolean(opts.skipDuplicateFiles) &&
+    bags.some((bag) => sameTokens(bag.tokens, tokens));
+}
+
+// Whether two token streams are identical by (masked) value.
+function sameTokens(a, b) {
+  return a.length === b.length && a.every((t, i) => t.value === b[i].value);
 }
 
 // ---------------------------------------------------------------------------
@@ -330,13 +382,22 @@ function literalPlaceholder(token) {
   return undefined;
 }
 
-// Masked value of one token: literal erasure first, then consistent local
-// renaming (API surface — names outside the scope's declared set — keeps
-// its lexeme).
+// babel token labels that are identifier-shaped for --ignore-identifiers.
+const IDENTIFIER_LABELS = new Set(['name', 'privateName']);
+
+// Masked value of one token: literal erasure first, then identifier
+// erasure (CPD --ignore-identifiers, structure-only matching), then
+// consistent local renaming. babel's `name` label covers plain
+// identifiers AND contextual keywords (async, of, from, as, get, ...) —
+// the JS analog of upstream's built-in/pseudo keyword slots — and
+// `privateName` the #-prefixed ones; real keywords keep their lexeme.
 function tokenValue(token, lexeme, opts, scopes) {
   if (opts.ignoreLiterals) {
     const placeholder = literalPlaceholder(token);
     if (placeholder) return placeholder;
+  }
+  if (opts.ignoreIdentifiers && IDENTIFIER_LABELS.has(token.type.label)) {
+    return '$ID';
   }
   if (scopes.length > 0 && token.type.label === 'name') {
     const scope = scopeAt(scopes, token.start);
@@ -346,17 +407,20 @@ function tokenValue(token, lexeme, opts, scopes) {
 }
 
 // Normalized token stream for the masked modes: raw lexeme plus masked
-// value (identical when no masking applies), comments and EOF skipped.
-// Template text chunks are already opaque constants in babel's stream and
-// the identifiers they interpolate are renamed by the scope machinery, so
-// unlike upstream (a single STRING_INTERPOLATION token) no $STR masking is
-// needed under ignore_locals alone.
+// value (identical when no masking applies), comments and EOF skipped,
+// and --ignore-imports ranges dropped. Template text chunks are already
+// opaque constants in babel's stream and the identifiers they interpolate
+// are renamed by the scope machinery, so unlike upstream (a single
+// STRING_INTERPOLATION token) no $STR masking is needed under
+// ignore_locals alone.
 function normalizedTokens(source, ext, opts) {
   const { tokens, program } = parseTokenized(source, ext);
   const scopes = opts.ignoreLocals ? buildScopes(program) : [];
+  const ranges = opts.ignoreImports ? importSkipRanges(program) : [];
   const normalized = [];
   for (const token of tokens) {
     if (token.type.label === 'eof' || typeof token.type === TYPE_STRING) continue;
+    if (inRanges(ranges, token.start)) continue;
     const lexeme = source.slice(token.start, token.end);
     normalized.push({
       lexeme,
@@ -367,6 +431,55 @@ function normalizedTokens(source, ext, opts) {
   return normalized;
 }
 
+// Token [start, end) ranges excluded under --ignore-imports: import/export
+// directives — the JS analog of upstream's import/export/part — plus
+// CommonJS require() calls (a CJS import). `export` wrapping real code
+// keeps the code: only the `export`/`export default` keywords and a
+// trailing `from '...'` clause of a re-export drop out; a brace-less
+// `export { a, b } [from '...']` is directive boilerplate throughout.
+function importSkipRanges(program) {
+  const ranges = [];
+  const walk = (node) => {
+    if (DIRECTIVE_TYPES.has(node.type)) {
+      ranges.push([node.start, node.end]);
+      return;
+    }
+    if (node.type === 'ExportNamedDeclaration') {
+      // babel never attaches `source` when `declaration` is present (the
+      // two are mutually exclusive), so a wrapping export has no trailing
+      // from-clause to drop.
+      if (!node.declaration) {
+        ranges.push([node.start, node.end]);
+        return;
+      }
+      ranges.push([node.start, node.declaration.start]);
+    } else if (node.type === 'ExportDefaultDeclaration') {
+      ranges.push([node.start, node.declaration.start]);
+    } else if (isRequireCall(node)) {
+      ranges.push([node.start, node.end]);
+      return;
+    }
+    for (const child of childNodes(node)) walk(child);
+  };
+  walk(program);
+  return ranges;
+}
+
+// Pure directive statements (no wrapped code).
+const DIRECTIVE_TYPES = new Set(['ImportDeclaration', 'ExportAllDeclaration']);
+
+// Whether node is a CommonJS `require(...)` call.
+function isRequireCall(node) {
+  return node.type === 'CallExpression' &&
+    node.callee.type === 'Identifier' &&
+    node.callee.name === 'require';
+}
+
+// Whether offset falls inside any [start, end) range (few ranges, linear).
+function inRanges(ranges, offset) {
+  return ranges.some(([s, e]) => offset >= s && offset < e);
+}
+
 // Upstream line count: newline count, +1 for a trailing fragment. Only
 // called on files with >= minTokens tokens, so source is never empty.
 function lineCount(source) {
@@ -374,47 +487,157 @@ function lineCount(source) {
   return source.endsWith('\n') ? newlines : newlines + 1;
 }
 
-// Indexes every valid window by its joined lexemes, then marks every
-// token of windows seen two or more times — within or across files — as
-// duplicated. Two passes when local renaming is active (upstream 94299e0):
-// raw lexemes (Type-1) alongside the masked values (Type-2), unioned —
-// placeholder numbering is first-use-per-scope, so the masked pass alone
-// could miss exact copies whose enclosing scopes shift the numbering.
-function markDuplicates(bags, minTokens, minLines, ignoreLocals) {
-  if (ignoreLocals) markPass(bags, minTokens, minLines, (t) => t.lexeme);
-  markPass(bags, minTokens, minLines, (t) => t.value);
+// The duplication engine (upstream CPD-parity rework). Each pass indexes
+// every valid window by its joined code string and turns every bucket of
+// two or more positions into a candidate group whose occurrences extend
+// to the maximal extent they share (the longest common run around the
+// minTokens window). Candidates from both passes then compete in one
+// greedy selection; acceptGroups marks the tokens of the winners. Two
+// passes when local renaming is active (upstream 94299e0): raw lexemes
+// (Type-1) alongside the masked values (Type-2) — placeholder numbering
+// is first-use-per-scope, so the masked pass alone could miss exact
+// copies whose enclosing scopes shift the numbering.
+function detectClones(bags, opts) {
+  const candidates = [];
+  if (opts.ignoreLocals) {
+    candidates.push(...collectGroups(bags, opts, (t) => t.lexeme));
+  }
+  candidates.push(...collectGroups(bags, opts, (t) => t.value));
+  // Longest clones first, then most occurrences, then position — the
+  // selection order that keeps reporting deterministic.
+  candidates.sort(byPriority);
+  return candidates;
 }
 
-// One detection pass over the per-token strings `codeOf` selects.
-function markPass(bags, minTokens, minLines, codeOf) {
+// One detection pass: index windows, build candidate groups.
+function collectGroups(bags, opts, codeOf) {
+  const { minTokens, minLines } = opts;
   const occurrences = new Map();
+  const codes = bags.map((bag) => bag.tokens.map(codeOf));
   for (let b = 0; b < bags.length; b++) {
-    indexWindows(bags[b].tokens, b, minTokens, minLines, occurrences, codeOf);
+    indexWindows(bags[b].tokens, b, minTokens, minLines, occurrences, codes[b]);
   }
+  const groups = [];
   for (const positions of occurrences.values()) {
-    if (positions.length < 2) continue;
-    for (const [b, start] of positions) {
-      const tokens = bags[b].tokens;
-      const limit = Math.min(start + minTokens, tokens.length);
-      for (let i = start; i < limit; i++) tokens[i].dup = true;
+    if (positions.length >= 2) {
+      const group = groupFromBucket(bags, positions, codes, minTokens, minLines);
+      if (group) groups.push(group);
     }
   }
+  return groups;
 }
 
-// Sliding windows of minTokens tokens; a window is recorded only when it
+// Sliding windows of minTokens codes; a window is recorded only when it
 // spans at least minLines source lines (first to last token).
-function indexWindows(tokens, bagIndex, minTokens, minLines, occurrences, codeOf) {
-  const lines = tokens.map((t) => t.line);
+function indexWindows(tokens, bagIndex, minTokens, minLines, occurrences, codes) {
   for (let start = 0; start + minTokens <= tokens.length; start++) {
-    if (lines[start + minTokens - 1] - lines[start] + 1 < minLines) continue;
-    const key = tokens
-      .slice(start, start + minTokens)
-      .map(codeOf)
-      .join('\u0000');
+    if (tokens[start + minTokens - 1].line - tokens[start].line + 1 < minLines) {
+      continue;
+    }
+    const key = codes.slice(start, start + minTokens).join('\u0000');
     const positions = occurrences.get(key);
     if (positions) positions.push([bagIndex, start]);
     else occurrences.set(key, [[bagIndex, start]]);
   }
+}
+
+// One candidate group from a bucket: [bagIndex, start, end) per occurrence.
+// Every position's window is extended against the first position's (the
+// reference) to the extent they share, then clipped to the common token
+// count; the reference is anchored at its own window and clipped to the
+// same length — it must not extend against itself, or it would grow over
+// the whole file. Dropped when the common span holds fewer than minLines
+// lines. Bucket keys are exact windows (string equality), so upstream's
+// collision re-verification has no JS counterpart.
+function groupFromBucket(bags, positions, codes, minTokens, minLines) {
+  const [refBag, refStart] = positions[0];
+  const refCodes = codes[refBag];
+  const extents = positions.map(([b, start]) =>
+    extentOf(codes[b], start, refCodes, refStart, minTokens));
+  let commonLen = minTokens;
+  for (let i = 1; i < extents.length; i++) {
+    commonLen = Math.min(commonLen, extents[i][1] - extents[i][0]);
+  }
+  const refTokens = bags[refBag].tokens;
+  const lineSpan =
+    refTokens[refStart + commonLen - 1].line - refTokens[refStart].line + 1;
+  if (lineSpan < minLines) return null;
+  return positions.map(([b, start], i) => {
+    const s = i === 0 ? refStart : extents[i][0];
+    return [b, s, s + commonLen];
+  });
+}
+
+// The reporting order: longest clones first, then most occurrences, then
+// first position.
+function byPriority(a, b) {
+  const len = (g) => g[0][2] - g[0][1];
+  if (len(b) !== len(a)) return len(b) - len(a);
+  if (b.length !== a.length) return b.length - a.length;
+  return a[0][0] - b[0][0] || a[0][1] - b[0][1];
+}
+
+// Greedily accepts non-overlapping groups — PMD CPD Match semantics — and
+// marks their tokens duplicated; a group whose ANY occurrence overlaps an
+// already accepted range is dropped whole.
+function acceptGroups(bags, candidates) {
+  const accepted = [];
+  const taken = new Map();
+  for (const group of candidates) {
+    if (group.some(([b, s, e]) => overlaps(taken.get(b), s, e))) continue;
+    for (const [b, s, e] of group) {
+      if (!taken.has(b)) taken.set(b, []);
+      taken.get(b).push([s, e]);
+      const tokens = bags[b].tokens;
+      for (let i = s; i < e; i++) tokens[i].dup = true;
+    }
+    accepted.push(group);
+  }
+  return accepted;
+}
+
+// Whether [start]..[end) overlaps any accepted range of one file.
+function overlaps(ranges, start, end) {
+  return (ranges ?? []).some(([s, e]) => start < e && s < end);
+}
+
+// Maximal extent of the window at curStart shared with the reference at
+// refStart: grown left and right while the surrounding codes match.
+function extentOf(cur, curStart, ref, refStart, minTokens) {
+  let start = curStart;
+  let refS = refStart;
+  while (start > 0 && refS > 0 && cur[start - 1] === ref[refS - 1]) {
+    start--;
+    refS--;
+  }
+  let end = curStart + minTokens;
+  let refE = refStart + minTokens;
+  while (end < cur.length && refE < ref.length && cur[end] === ref[refE]) {
+    end++;
+    refE++;
+  }
+  return [start, end];
+}
+
+// One violation per accepted clone group, every occurrence location in
+// the message (PMD CPD style); at most three locations inline.
+function clonesResult(bags, groups) {
+  const violations = groups.map((group) => {
+    const [refBag, refStart, refEnd] = group[0];
+    const locations = group.map(([b, s, e]) =>
+      `${bags[b].rel}:${bags[b].tokens[s].line}-${bags[b].tokens[e - 1].line}`);
+    const shown = locations.slice(0, 3).join('; ');
+    const more = locations.length > 3 ? ` (+${locations.length - 3} more)` : '';
+    const tokens = bags[refBag].tokens;
+    const lineSpan = tokens[refEnd - 1].line - tokens[refStart].line + 1;
+    return {
+      file: bags[refBag].rel,
+      line: tokens[refStart].line,
+      message: `clone: ${refEnd - refStart} tokens / ${lineSpan} lines, ` +
+        `${locations.length} occurrences: ${shown}${more}`,
+    };
+  });
+  return { violations, checked: bags.length };
 }
 
 function duplicatedLines(bag) {
@@ -438,10 +661,15 @@ function violationFor(bag, dupLines, threshold) {
   };
 }
 
-// One-line summary mirroring the Dart gate: pass reports the tokenized
-// file count and the overall duplicated-line percent, fail reports how
-// many files are over the threshold.
+// One-line summaries mirroring the Dart gate: percentage mode reports the
+// tokenized file count and overall duplicated-line percent on pass, the
+// over-threshold file count on fail; clones mode counts accepted groups.
 function duplicatesSummary({ violations, checked, checkedLines, dupLines }, opts) {
+  if (opts.report === 'clones') {
+    return violations > 0
+      ? `${violations} clone groups (>= ${opts.minTokens} tokens, >= ${opts.minLines} lines)`
+      : `no clones >= ${opts.minLines} lines across ${checked} files`;
+  }
   if (violations > 0) {
     return `${violations}/${checked} files over ${opts.threshold}% duplication`;
   }

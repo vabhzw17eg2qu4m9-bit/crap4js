@@ -69,9 +69,12 @@ crap4js magic-constants [paths...]
                          Flag hex colors outside constants and literals
                          repeated 3+ times in one file.
 crap4js duplicates [--threshold N] [--min-tokens N] [--min-lines N]
+                   [--report percentage|clones] [--ignore-locals]
+                   [--ignore-literals] [--ignore-identifiers]
+                   [--ignore-imports] [--skip-duplicate-files]
                    [--exclude GLOB]... [--source PATH]... [paths...]
-                   Flag files whose duplicated lines exceed the threshold
-                   (token windows within/across files).
+                   Flag duplicated token windows within/across files;
+                   clones mode reports one violation per clone group.
 crap4js test-assertions [paths...]
                          Flag test()/it() bodies with zero assertion calls.
 crap4js folder-structure Flag src/ directories with loose direct files.
@@ -298,21 +301,29 @@ violations exist.
 ## `duplicates`
 
 `crap4js duplicates [--threshold N] [--min-tokens N] [--min-lines N]
-[--ignore-locals] [--ignore-literals] [--exclude GLOB]... [--source
-PATH]... [paths...]` (port of crap4dart's duplication gate, 0.9.x,
-including its per-gate `sources` union) detects exact copy-paste
-duplicates. Every scanned file is tokenized (comments skipped, raw
-lexemes kept) and every window of `--min-tokens` tokens (default 50)
-spanning at least `--min-lines` source lines (default 5) is indexed; any
-window appearing twice or more — within or across files — marks its
-tokens duplicated. A file violates when its distinct duplicated lines
-exceed `--threshold` percent (default 1) of its lines; the reported line
-is the first duplicated one. Because windows straddle statement
-boundaries, the lines adjacent to a duplicated block are usually marked
-too.
+[--report percentage|clones] [--ignore-locals] [--ignore-literals]
+[--ignore-identifiers] [--ignore-imports] [--skip-duplicate-files]
+[--exclude GLOB]... [--source PATH]... [paths...]` (port of crap4dart's
+duplication gate, 0.9.x incl. commit d6c3ab6, including its per-gate
+`sources` union) detects copy-paste duplicates. Every scanned file is
+tokenized (comments skipped) and windows of `--min-tokens` tokens
+(default 50) spanning at least `--min-lines` source lines (default 5)
+are indexed; every window appearing twice or more — within or across
+files — grows a clone group whose occurrences extend to the maximal
+extent they share. Accepted groups are non-overlapping, longest first
+(PMD CPD Match semantics); the windows are compared by exact token
+equality (the port indexes joined token strings, so fingerprint
+collisions cannot arise).
 
-Two opt-in normalizations extend detection to renamed clones (upstream
-"Type-2", 0.9.x commit 0599df2):
+`--report` chooses the verdict style: `percentage` (the default) fails
+each file whose distinct duplicated lines exceed `--threshold` percent
+(default 1), reporting the first duplicated line; `clones` (PMD CPD
+style) fails once per accepted clone group with all its occurrence
+locations (`file:line-line`) in the message, at most three inline. In
+percentage mode only accepted groups mark lines — an overlapping shorter
+clone no longer inflates a file's percent.
+
+Opt-in normalizations extend detection beyond exact copy-paste:
 
 - `--ignore-locals`: identifiers declared inside a function — parameters
   (except TS parameter properties, which reference API state), local
@@ -326,12 +337,30 @@ Two opt-in normalizations extend detection to renamed clones (upstream
   chunks and the embedded identifiers are renamed like any other local.
 - `--ignore-literals`: string and numeric literal tokens are replaced
   with `$STR`/`$NUM` placeholders before hashing.
+- `--ignore-identifiers`: every identifier-shaped token collapses to one
+  `$ID` placeholder (CPD `--ignore-identifiers`, structure-only
+  matching). babel labels contextual keywords (`async`, `of`, `from`,
+  `as`, `get`, ...) as plain `name` tokens, so they are masked too — the
+  JS analog of upstream's built-in/pseudo keyword slots — along with
+  `#private` names; real keywords keep their lexeme.
+- `--ignore-imports`: import/export directives and CommonJS `require()`
+  calls are excluded from tokenization (upstream masks
+  import/export/part; `require` is the CJS import). `export` wrapping
+  real code keeps the code — only the `export`/`export default` keywords
+  drop out; a brace re-export (`export { a, b } [from '...']`) is
+  directive boilerplate throughout and drops whole.
+- `--skip-duplicate-files`: a file whose token stream equals an earlier
+  file's (by masked value, so copies differing only in comments count
+  too) is analyzed once (CPD `--skip-duplicate-files`) — a copied file
+  is reported once, not as N x N pairs.
 
-With both flags off the gate reports exact copy-paste only. Detection is
-a union of two passes (upstream 94299e0): the raw-lexeme pass always runs
-alongside the masked one, so enabling `--ignore-locals` can only add
-findings — exact copies are never lost when enclosing scopes shift the
-placeholder numbering.
+With the flags off the gate reports exact copy-paste only. Detection is
+a union of two passes (upstream 94299e0): the raw-lexeme pass runs
+alongside the masked one whenever local renaming is on, so enabling
+`--ignore-locals` can only add findings — exact copies are never lost
+when enclosing scopes shift the placeholder numbering. Candidates from
+both passes compete in one greedy selection: a longer renamed clone wins
+over the shorter exact copy it contains.
 
 The scan set is the standard gate selection (explicit paths or the
 `src/` walk — test files and test directories always excluded) unioned

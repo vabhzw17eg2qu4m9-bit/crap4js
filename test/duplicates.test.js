@@ -53,9 +53,19 @@ const SMALL = { threshold: 1, minTokens: 5, minLines: 2 };
 // Fixtures therefore pin whole-percentage expectations verified against
 // the algorithm rather than naive "only the block lines" sets.
 
+// Upstream d6c3ab6 reworked marking: only ACCEPTED clone groups mark
+// tokens (greedy longest-first non-overlapping), each occurrence being the
+// left-extended `minTokens` window — no longer the union of every sliding
+// window in a bucket. Exact-percentage pins below are re-derived from that
+// algorithm; they kill the old over-marking behavior (a file with one
+// duplicated block used to report every block line, e.g. 75.00%, where the
+// new engine reports the accepted windows only, e.g. 37.50%).
+
 test('within-file duplicate: flagged with percent, first line, upstream message', () => {
-  // The 3-line block twice plus two unique tail lines: 6 of 8 lines are
-  // duplicated (the statement boundary before each block participates).
+  // The accepted group marks one left-extended window per occurrence:
+  // lines {1,2} (window at tokens 5..9) and {4} (window at tokens 27..31)
+  // — 3 of 8 lines under the new engine (was 6 of 8 under the old
+  // mark-every-window union).
   const source = [...blockLines(3), ...blockLines(3), 'const alpha = 1;', 'const beta = 2;'];
   const root = fixture({ 'src/a.js': source.join('\n') + '\n' });
   try {
@@ -68,7 +78,7 @@ test('within-file duplicate: flagged with percent, first line, upstream message'
     assert.equal(violations.length, 1);
     assert.equal(violations[0].file, 'src/a.js');
     assert.equal(violations[0].line, 1);
-    assert.equal(violations[0].message, '75.00% duplicated lines > 1%');
+    assert.equal(violations[0].message, '37.50% duplicated lines > 1%');
   } finally {
     cleanup(root);
   }
@@ -82,8 +92,10 @@ test('cross-file duplicate: both files flagged, default threshold trips', () => 
     const code = runDuplicates(["--min-tokens", "5", "--min-lines", "2"], ctx);
     assert.equal(code, 2);
     assert.equal(ctx.lines.length, 3);
-    assert.equal(ctx.lines[0], 'src/a.js:1: 100.00% duplicated lines > 1%\n');
-    assert.equal(ctx.lines[1], 'src/b.js:1: 100.00% duplicated lines > 1%\n');
+    // One accepted group: the reference occurrence marks lines {1,2} of
+    // a.js, the left-extended partner occurrence line {1} of b.js.
+    assert.equal(ctx.lines[0], 'src/a.js:1: 50.00% duplicated lines > 1%\n');
+    assert.equal(ctx.lines[1], 'src/b.js:1: 25.00% duplicated lines > 1%\n');
     assert.equal(ctx.lines[2], '2/2 files over 1% duplication\n');
   } finally {
     cleanup(root);
@@ -107,7 +119,8 @@ test('numeric flags round-trip through the CLI to the detector', () => {
       return [runDuplicates(['src', 'other', ...args], ctx), ctx.lines.join('')];
     };
     // Default flags: 50-token windows span all 7 lines — both flagged.
-    assert.deepEqual(run([]), [2, ['other/b.js:1: 100.00% duplicated lines > 1%', 'src/a.js:1: 100.00% duplicated lines > 1%', '2/2 files over 1% duplication'].join('\n') + '\n']);
+    // The accepted groups mark 6 of 7 lines per file (85.71%).
+    assert.deepEqual(run([]), [2, ['other/b.js:1: 85.71% duplicated lines > 1%', 'src/a.js:1: 85.71% duplicated lines > 1%', '2/2 files over 1% duplication'].join('\n') + '\n']);
     // The reported repro: min-tokens 20 alone — windows span < 5 lines,
     // so no window is recorded and the pair scans clean (upstream-faithful).
     assert.deepEqual(run(['--min-tokens', '20']), [0, '2 files, 0.00% duplicated lines\n']);
@@ -122,6 +135,7 @@ test('numeric flags round-trip through the CLI to the detector', () => {
     const [overCode, overOut] = run(['--threshold', '0.5']);
     assert.equal(overCode, 2);
     assert.match(overOut, /2\/2 files over 0\.5% duplication/);
+    assert.match(overOut, /85\.71% duplicated lines > 0\.5%/);
     assert.deepEqual(run(['--threshold', '100'])[0], 0);
   } finally {
     cleanup(root);
@@ -164,15 +178,16 @@ test('min-lines boundary: exactly minLines detected, one more not', () => {
 });
 
 test('threshold boundary: percent == threshold passes, above fails', () => {
-  // The twice-repeated block plus two unique lines: exactly 75% duplicated.
+  // The twice-repeated block plus two unique lines: the accepted group
+  // marks 3 of 8 lines (37.50%) under the accepted-window marking.
   const source = [...blockLines(3), ...blockLines(3), 'const alpha = 1;', 'const beta = 2;'];
   const root = fixture({ 'src/a.js': source.join('\n') + '\n' });
   try {
     const file = [path.join(root, 'src/a.js')];
-    const equal = duplicatesViolations(file, root, { threshold: 75, minTokens: 5, minLines: 2 });
+    const equal = duplicatesViolations(file, root, { threshold: 37.5, minTokens: 5, minLines: 2 });
     assert.deepEqual(equal.violations, []);
-    const over = duplicatesViolations(file, root, { threshold: 74, minTokens: 5, minLines: 2 });
-    assert.equal(over.violations[0].message, '75.00% duplicated lines > 74%');
+    const over = duplicatesViolations(file, root, { threshold: 37, minTokens: 5, minLines: 2 });
+    assert.equal(over.violations[0].message, '37.50% duplicated lines > 37%');
   } finally {
     cleanup(root);
   }
@@ -191,8 +206,8 @@ test('--source unions extra paths: cross-module pair detected, missing skipped',
 
     const unioned = fakeCtx(root);
     assert.equal(runDuplicates(['--min-tokens', '5', '--min-lines', '2', '--source', 'vendor/module'], unioned), 2);
-    assert.equal(unioned.lines[0], 'src/main.js:1: 100.00% duplicated lines > 1%\n');
-    assert.equal(unioned.lines[1], 'vendor/module/peer.js:1: 100.00% duplicated lines > 1%\n');
+    assert.equal(unioned.lines[0], 'src/main.js:1: 50.00% duplicated lines > 1%\n');
+    assert.equal(unioned.lines[1], 'vendor/module/peer.js:1: 25.00% duplicated lines > 1%\n');
     assert.equal(unioned.lines[2], '2/2 files over 1% duplication\n');
 
     const missing = fakeCtx(root);
@@ -212,7 +227,7 @@ test('--exclude glob drops matching project-relative paths', () => {
     const excluded = fakeCtx(root);
     assert.equal(runDuplicates(['--min-tokens', '5', '--min-lines', '2', '--exclude', 'src/b.js'], excluded), 2);
     assert.equal(excluded.lines.length, 2);
-    assert.equal(excluded.lines[0], 'src/a.js:1: 100.00% duplicated lines > 1%\n');
+    assert.equal(excluded.lines[0], 'src/a.js:1: 50.00% duplicated lines > 1%\n');
     assert.equal(excluded.lines[1], '1/1 files over 1% duplication\n');
 
     const all = fakeCtx(root);
@@ -268,7 +283,7 @@ test('comments are not tokens: blocks differing only in comments duplicate', () 
   try {
     const ctx = fakeCtx(root);
     assert.equal(runDuplicates(["--min-tokens", "5", "--min-lines", "2"], ctx), 2);
-    assert.equal(ctx.lines[0], 'src/a.js:1: 100.00% duplicated lines > 1%\n');
+    assert.equal(ctx.lines[0], 'src/a.js:1: 50.00% duplicated lines > 1%\n');
     assert.equal(ctx.lines[2], '2/2 files over 1% duplication\n');
   } finally {
     cleanup(root);
@@ -280,6 +295,7 @@ test('parseDuplicateArgs: defaults, repeatable flags, inline values, paths', () 
     threshold: 1,
     minTokens: 50,
     minLines: 5,
+    report: 'percentage',
     exclude: [],
     source: [],
     paths: [],
@@ -299,6 +315,7 @@ test('parseDuplicateArgs: defaults, repeatable flags, inline values, paths', () 
       threshold: 2.5,
       minTokens: 10,
       minLines: 3,
+      report: 'percentage',
       exclude: ['gen/**', 'vendor/**'],
       source: ['lib', 'peer'],
       paths: ['src/custom.js'],
@@ -311,6 +328,7 @@ test('parseDuplicateArgs: usage errors throw', () => {
   assert.throws(() => parseDuplicateArgs(['--threshold=abc']), /Invalid --threshold: abc/);
   assert.throws(() => parseDuplicateArgs(['--min-tokens=-1']), /Invalid --min-tokens: -1/);
   assert.throws(() => parseDuplicateArgs(['--bogus=1']), /unknown flag: --bogus/);
+  assert.throws(() => parseDuplicateArgs(['--report', 'pmd']), /Invalid --report: pmd/);
 });
 
 test('tokenizeSource: lexemes and lines, comments and EOF skipped, TS routed', () => {
@@ -681,6 +699,7 @@ test('parseDuplicateArgs: boolean normalization flags are bare and opt-in', () =
     threshold: 1,
     minTokens: 50,
     minLines: 5,
+    report: 'percentage',
     exclude: [],
     source: [],
     paths: [],
@@ -693,4 +712,290 @@ test('parseDuplicateArgs: boolean normalization flags are bare and opt-in', () =
   // is rejected like any unknown flag (upstream's unknown-key rejection).
   assert.throws(() => parseDuplicateArgs(['--ignore-localss=x']), /unknown flag: --ignore-localss/);
   assert.throws(() => parseDuplicateArgs(['--ignore-locals=false']), /unknown flag: --ignore-locals/);
+});
+
+// ---------------------------------------------------------------------------
+// Upstream d6c3ab6 (CPD parity): --report clones, --ignore-identifiers,
+// --ignore-imports, --skip-duplicate-files. All pins below verified against
+// the ported algorithm.
+
+const CLONES = { report: 'clones' };
+
+test('--report clones: one violation per clone group with all locations', () => {
+  const body = [...blockLines(3), 'const tail = 9;'].join('\n') + '\n';
+  const root = fixture({ 'src/a.js': body, 'src/b.js': body });
+  try {
+    const ctx = fakeCtx(root);
+    assert.equal(
+      runDuplicates(['--min-tokens', '5', '--min-lines', '2', '--report', 'clones'], ctx),
+      2,
+    );
+    assert.equal(ctx.lines.length, 2);
+    assert.equal(
+      ctx.lines[0],
+      'src/a.js:1: clone: 5 tokens / 2 lines, 2 occurrences: ' +
+        'src/a.js:1-2; src/b.js:1-1\n',
+    );
+    assert.equal(ctx.lines[1], '1 clone groups (>= 5 tokens, >= 2 lines)\n');
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('--report clones passes a project without duplicates', () => {
+  const root = fixture({ 'src/a.js': 'const a = 1;\nconst b = 2;\nconst c = 3;\n' });
+  try {
+    const ctx = fakeCtx(root);
+    assert.equal(
+      runDuplicates(['--min-tokens', '5', '--min-lines', '2', '--report', 'clones'], ctx),
+      0,
+    );
+    assert.equal(ctx.lines[0], 'no clones >= 2 lines across 1 files\n');
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('clone groups are ordered by occurrence count, then position', () => {
+  // A group of three copies (w/x/y) reports before a two-copy group (a/b);
+  // equal-length groups tie-break deterministically. Group length is always
+  // the minTokens window (the shared extent can only shift it left), so the
+  // upstream "longest first" key ties here and the next keys decide.
+  const triple = (f) =>
+    [...blockLines(3, 'q'), `${f}0 = 0 * 3 + 1;`, `${f}1 = 1 * 3 + 1;`].join('\n') + '\n';
+  const pair = (f) =>
+    [...blockLines(3, 'r'), `${f}0 = 0 * 5 + 2;`, `${f}1 = 1 * 5 + 2;`].join('\n') + '\n';
+  const root = fixture({
+    'src/w.js': triple('w'),
+    'src/x.js': triple('x'),
+    'src/y.js': triple('y'),
+    'src/a.js': pair('a'),
+    'src/b.js': pair('b'),
+  });
+  try {
+    const ctx = fakeCtx(root);
+    assert.equal(
+      runDuplicates(['--min-tokens', '5', '--min-lines', '2', '--report', 'clones'], ctx),
+      2,
+    );
+    assert.match(ctx.lines[0], /3 occurrences: src\/w\.js:1-2; src\/x\.js:1-1; src\/y\.js:1-1/);
+    assert.match(ctx.lines[1], /2 occurrences: src\/a\.js:1-2; src\/b\.js:1-1/);
+    assert.equal(ctx.lines[2], '2 clone groups (>= 5 tokens, >= 2 lines)\n');
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('--report clones: at most three locations inline, the rest counted', () => {
+  const files = {};
+  for (const f of ['w', 'x', 'y', 'z']) {
+    const filler = Array.from({ length: 3 }, (_, i) => `${f}${i} = ${i} * 13 + 7;`).join('\n');
+    files[`src/${f}.js`] = [...blockLines(2, 'q'), filler].join('\n') + '\n';
+  }
+  const root = fixture(files);
+  try {
+    const ctx = fakeCtx(root);
+    assert.equal(
+      runDuplicates(['--min-tokens', '5', '--min-lines', '2', '--report', 'clones'], ctx),
+      2,
+    );
+    assert.equal(
+      ctx.lines[0],
+      'src/w.js:1: clone: 5 tokens / 2 lines, 4 occurrences: ' +
+        'src/w.js:1-2; src/x.js:1-1; src/y.js:1-1 (+1 more)\n',
+    );
+  } finally {
+    cleanup(root);
+  }
+});
+
+// Everything identifier-shaped is renamed: function names, locals, called
+// methods (push→add), globals (console→process), even a contextual keyword
+// name (get→fetch — babel labels contextual keywords `name`, the JS analog
+// of upstream's built-in/pseudo keyword slots). Without the flag no
+// minTokens window of raw text survives the renames; with it the streams
+// collapse to the same $ID skeleton and the clone is reported.
+test('--ignore-identifiers detects clones renamed anywhere (CPD parity)', () => {
+  const fn = (name, loopVar, items, local, method, glob, sep) => `function ${name}(${items}, ${sep}) {
+  const ${local} = [];
+  for (const ${loopVar} of ${items}) {
+    ${local}.${method}(${loopVar});
+    ${local}.${method}(${sep});
+  }
+  ${glob}.log(${local}.join(${sep}));
+  ${glob}.log(${local}.length);
+  ${glob}.log(${items}.${name});
+}
+${name}(['a'], '-');
+`;
+  const root = fixture({
+    'src/a.js': fn('first', 'element', 'items', 'acc', 'push', 'console', 'sep'),
+    'src/b.js': fn('second', 'item', 'list', 'buf', 'fetch', 'process', 'glue'),
+  });
+  try {
+    const off = fakeCtx(root);
+    assert.equal(
+      runDuplicates(['--min-tokens', '10', '--min-lines', '2', '--report', 'clones'], off),
+      0,
+      'renamed-everywhere sources must not clone without the flag',
+    );
+    const on = fakeCtx(root);
+    assert.equal(
+      runDuplicates(['--min-tokens', '10', '--min-lines', '2', '--report', 'clones', '--ignore-identifiers'], on),
+      2,
+    );
+    assert.match(
+      on.lines[0],
+      // The surviving group is the statement pair both files repeat; a.js
+      // holds two overlapping occurrences of it, plus one per file beyond.
+      /^src\/a\.js:\d+: clone: 10 tokens \/ 2 lines, 4 occurrences: src\/a\.js:\d+-\d+; /,
+    );
+    assert.match(on.lines[0], /src\/b\.js:\d+-\d+/);
+    assert.equal(on.lines[1], '1 clone groups (>= 10 tokens, >= 2 lines)\n');
+  } finally {
+    cleanup(root);
+  }
+});
+
+// Two import lines (18 tokens) plus an 18-token body clears min-tokens 30
+// only with the imports; excluding them leaves a sub-minTokens stream and
+// the pair scans clean (upstream: import/export/part out of tokenization).
+function importsFixture(body) {
+  return `import { format } from './format.js';\nimport { parse } from './parse.js';\n${body}`;
+}
+
+test('--ignore-imports drops import statements from tokenization', () => {
+  const body = blockLines(2).join('\n') + '\n';
+  const root = fixture({
+    'src/a.js': importsFixture(body),
+    'src/b.js': importsFixture(body),
+  });
+  try {
+    const off = fakeCtx(root);
+    assert.equal(
+      runDuplicates(['--min-tokens', '30', '--min-lines', '2', '--report', 'clones'], off),
+      2,
+      'imports + body clear min-tokens without the flag',
+    );
+    const on = fakeCtx(root);
+    assert.equal(
+      runDuplicates(['--min-tokens', '30', '--min-lines', '2', '--report', 'clones', '--ignore-imports'], on),
+      0,
+    );
+    assert.equal(on.lines[0], 'no clones >= 2 lines across 0 files\n');
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('--ignore-imports treats require() calls as imports (CJS)', () => {
+  const body = blockLines(2).join('\n') + '\n';
+  const src = `const f = require('./format.js');\nconst g = require('./parse.js');\n${body}`;
+  const root = fixture({ 'src/a.js': src, 'src/b.js': src });
+  try {
+    const off = fakeCtx(root);
+    assert.equal(
+      runDuplicates(['--min-tokens', '30', '--min-lines', '2', '--report', 'clones'], off),
+      2,
+    );
+    const on = fakeCtx(root);
+    assert.equal(
+      runDuplicates(['--min-tokens', '30', '--min-lines', '2', '--report', 'clones', '--ignore-imports'], on),
+      0,
+    );
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('--ignore-imports keeps the code an export wraps', () => {
+  // `export [default] function` drops only the keywords; the wrapped
+  // declarations still clear min-tokens, so the pair remains a clone.
+  const body = `function zed() {\n${blockLines(2).join('\n')}\n}\n`;
+  const root = fixture({
+    'src/a.js': `export default ${body}`,
+    'src/b.js': `export ${body}`,
+  });
+  try {
+    const on = fakeCtx(root);
+    assert.equal(
+      runDuplicates(['--min-tokens', '15', '--min-lines', '2', '--report', 'clones', '--ignore-imports'], on),
+      2,
+    );
+    assert.match(on.lines[0], /^src\/a\.js:1: clone: 15 tokens \/ \d+ lines/);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('--ignore-imports drops pure re-export boilerplate whole', () => {
+  // Files of nothing but re-export directives (the JS analog of upstream's
+  // `export 'x.dart';`): with the flag nothing tokenizes at all; without
+  // it the directive text is a cross-file clone.
+  const src = "export { format };\nexport { parse } from './parse.js';\nexport * from './x.js';\n";
+  const root = fixture({ 'src/a.js': src, 'src/b.js': src });
+  try {
+    const off = fakeCtx(root);
+    assert.equal(
+      runDuplicates(['--min-tokens', '5', '--min-lines', '2', '--report', 'clones'], off),
+      2,
+      'boilerplate alone is a clone without the flag',
+    );
+    const on = fakeCtx(root);
+    assert.equal(
+      runDuplicates(['--min-tokens', '5', '--min-lines', '2', '--report', 'clones', '--ignore-imports'], on),
+      0,
+    );
+    assert.equal(on.lines[0], 'no clones >= 2 lines across 0 files\n');
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('--skip-duplicate-files analyzes a token-identical file once (CPD parity)', () => {
+  const file = [...blockLines(4), 'const t = 1;'].join('\n') + '\n';
+  // c shares the block but differs in the tail — NOT skipped.
+  const variant = [...blockLines(4), 'const t = 2;'].join('\n') + '\n';
+  const root = fixture({ 'src/a.js': file, 'src/b.js': file, 'src/c.js': variant });
+  try {
+    const off = fakeCtx(root);
+    assert.equal(
+      runDuplicates(['--min-tokens', '5', '--min-lines', '2', '--report', 'clones'], off),
+      2,
+    );
+    assert.match(off.lines[0], /3 occurrences: src\/a\.js:1-2; src\/b\.js:1-1; src\/c\.js:1-1/);
+
+    const on = fakeCtx(root);
+    assert.equal(
+      runDuplicates(['--min-tokens', '5', '--min-lines', '2', '--report', 'clones', '--skip-duplicate-files'], on),
+      2,
+      'a and its copy still share the block with the differing c',
+    );
+    assert.match(on.lines[0], /2 occurrences: src\/a\.js:1-2; src\/c\.js:1-1/);
+
+    // The skipped copy is out of the scan entirely; the differing file stays.
+    const { checked } = duplicatesViolations(
+      ['a.js', 'b.js', 'c.js'].map((f) => path.join(root, 'src', f)),
+      root,
+      { ...SMALL, skipDuplicateFiles: true },
+    );
+    assert.equal(checked, 2);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('--skip-duplicate-files passes where every file is a copy', () => {
+  const file = [...blockLines(4), 'const t = 1;'].join('\n') + '\n';
+  const root = fixture({ 'src/a.js': file, 'src/b.js': file });
+  try {
+    const on = fakeCtx(root);
+    assert.equal(
+      runDuplicates(['--min-tokens', '5', '--min-lines', '2', '--report', 'clones', '--skip-duplicate-files'], on),
+      0,
+    );
+    assert.equal(on.lines[0], 'no clones >= 2 lines across 1 files\n');
+  } finally {
+    cleanup(root);
+  }
 });

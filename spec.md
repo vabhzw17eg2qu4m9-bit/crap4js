@@ -56,9 +56,12 @@ crap4js magic-constants [paths...]
                          Flag hex colors outside constants and literals
                          repeated 3+ times in one file.
 crap4js duplicates [--threshold N] [--min-tokens N] [--min-lines N]
+                   [--report percentage|clones] [--ignore-locals]
+                   [--ignore-literals] [--ignore-identifiers]
+                   [--ignore-imports] [--skip-duplicate-files]
                    [--exclude GLOB]... [--source PATH]... [paths...]
-                   Flag files whose duplicated lines exceed the threshold
-                   (token windows within/across files).
+                   Flag duplicated token windows within/across files;
+                   clones mode reports one violation per clone group.
 crap4js test-assertions [paths...]
                          Flag test()/it() bodies with zero assertion calls.
 crap4js folder-structure
@@ -485,13 +488,15 @@ was already the port's sort contract.
 ### duplicates
 
 Port of the crap4dart 0.9.x duplication gate (upstream spec §11.11)
-including the per-gate `sources` union (commit dc64e9c), with upstream
-defaults baked in (threshold=1, min_tokens=50, min_lines=5 — crap4js has
-no config):
+including the per-gate `sources` union (commit dc64e9c) and the CPD-parity
+rework (commit d6c3ab6), with upstream defaults baked in (threshold=1,
+min_tokens=50, min_lines=5, report=percentage — crap4js has no config):
 
 ```
 crap4js duplicates [--threshold N] [--min-tokens N] [--min-lines N]
-                   [--ignore-locals] [--ignore-literals]
+                   [--report percentage|clones] [--ignore-locals]
+                   [--ignore-literals] [--ignore-identifiers]
+                   [--ignore-imports] [--skip-duplicate-files]
                    [--exclude GLOB]... [--source PATH]... [paths...]
 ```
 
@@ -504,22 +509,37 @@ CommentToken and synthetic tokens instead. A duplicated block is a token
 sequence appearing at least twice, at least `--min-tokens` tokens long
 and spanning at least `--min-lines` source lines. Detection indexes
 every valid window (first-to-last token line span ≥ min_lines) across
-all scanned files together, keyed by the joined window lexemes — a
-string-keyed sliding window where upstream hashes the same windows with
-Rabin-Karp: same windows, no collision handling — and marks every token
-of windows seen two or more times, so blocks duplicated within or across
-files are marked in every copy. A file violates when its distinct
-duplicated lines exceed `--threshold` percent of its total lines
-(upstream newline count: newline total, +1 for a trailing fragment); the
-violation line is the first duplicated line and the message is
-`X.XX% duplicated lines > T%`. Because windows straddle statement
-boundaries, a repeated block usually drags the preceding line's final
-`;` into the duplicated set — same as upstream.
+all scanned files together, keyed by the joined window code string — a
+string key IS the exact window, so upstream's new token-equality
+verification of Rabin-Karp fingerprints (commit d6c3ab6) has no JS
+counterpart: collisions cannot arise. Every bucket of two or more window
+positions becomes a candidate clone group whose occurrences extend to
+the maximal extent they share (the longest common run around the
+minTokens window); the reference occurrence is anchored at its own
+window and clipped to the common length so it cannot extend against
+itself. Accepted groups are non-overlapping, longest first — PMD CPD
+Match semantics: candidates from both passes are sorted by length, then
+occurrence count, then position, and a group is accepted whole only when
+none of its occurrences overlaps an already accepted range. Because the
+shared extent grows leftward through preceding tokens, a repeated block
+usually drags the preceding line's final `;` into a marked window — same
+as upstream.
 
-Two opt-in normalizations extend detection to renamed clones
-("Type-2", upstream commit 0599df2; upstream reads the same knobs as the
-flat `ignore_locals`/`ignore_literals` YAML keys under the duplication
-gate — crap4js has no config, so they are kebab-case CLI flags):
+`--report` selects the violation style: `percentage` (the default) fails
+each file whose distinct duplicated lines exceed `--threshold` percent
+of its total lines (upstream newline count: newline total, +1 for a
+trailing fragment); the violation line is the first duplicated line and
+the message is `X.XX% duplicated lines > T%`. Only accepted groups mark
+lines — an overlapping shorter clone no longer inflates a file's
+percent. `clones` (PMD CPD style) fails once per accepted group with
+every occurrence location in the message:
+`clone: N tokens / M lines, K occurrences: rel:startLine-endLine; ...`,
+at most three locations inline and `(+L more)` for the rest; the
+violation file/line is the reference occurrence's first line.
+
+Optional normalizations (upstream reads the same knobs as flat YAML keys
+under the duplication gate — crap4js has no config, so they are
+kebab-case CLI flags):
 
 - `--ignore-locals`: identifiers declared inside a function — parameters
   (except TS parameter properties, which reference API state, matching
@@ -539,14 +559,34 @@ gate — crap4js has no config, so they are kebab-case CLI flags):
   separate `$STR` rule.
 - `--ignore-literals`: string and numeric literal tokens are replaced
   with `$STR`/`$NUM` placeholders before hashing.
+- `--ignore-identifiers` (commit d6c3ab6): every identifier-shaped token
+  collapses to one `$ID` placeholder before hashing (CPD
+  `--ignore-identifiers`, structure-only matching). babel labels
+  contextual keywords (`async`, `of`, `from`, `as`, `get`, ...) as plain
+  `name` tokens, so they are masked too — the JS analog of upstream's
+  built-in/pseudo keyword slots — along with `#private` names; real
+  keywords keep their lexeme. The mask runs after the literal mask and
+  before local renaming (which it subsumes), matching upstream's
+  precedence.
+- `--ignore-imports` (commit d6c3ab6): import/export directives and
+  CommonJS `require()` calls (a CJS import) are excluded from
+  tokenization; upstream masks `import`/`export`/`part`, which in JS wrap
+  code, so a wrapping `export`/`export default` drops only its keywords
+  and a brace re-export (`export { a, b } [from '...']`) drops whole.
+- `--skip-duplicate-files` (commit d6c3ab6): a file whose token stream
+  equals an earlier file's — compared by masked value, so copies
+  differing only in comments count too — is skipped from the scan after
+  the minTokens floor (CPD `--skip-duplicate-files`): a copied file is
+  reported once, not as N x N pairs.
 
-With both knobs off the gate reports exact copy-paste only (the default
+With the knobs off the gate reports exact copy-paste only (the default
 scan path is untouched). Detection is a union of two passes (upstream
 94299e0): when `--ignore-locals` is on, the raw-lexeme pass runs
-alongside the masked one and their duplicated-token marks are unioned —
-placeholders are numbered first-use-per-scope, so exact copies are never
-lost when enclosing scopes shift the numbering; the knobs can only add
-findings, thresholds and reporting are unchanged.
+alongside the masked one and their candidates compete in one greedy
+selection — placeholders are numbered first-use-per-scope, so exact
+copies are never lost when enclosing scopes shift the numbering, and a
+longer renamed clone wins over the shorter exact copy it contains; the
+knobs can only add findings.
 
 Scan set: the standard gate selection (explicit paths or the default
 `src/` walk) unioned with every `--source` path — files with a source
@@ -559,8 +599,10 @@ semantics. Upstream's default generated-file excludes (`**.g.dart`,
 `**.freezed.dart`, `**.mocks.dart`) have no JavaScript convention to
 map to and are not ported. Files with fewer than `--min-tokens` tokens
 are skipped from the scan; the summary counts only tokenized files —
-`N files, X.XX% duplicated lines` on pass, `M/N files over T%
-duplication` on fail. Exit 2 iff violations exist.
+percentage mode: `N files, X.XX% duplicated lines` on pass, `M/N files
+over T% duplication` on fail; clones mode: `no clones >= L lines across
+N files` on pass, `K clone groups (>= T tokens, >= L lines)` on fail.
+Exit 2 iff violations exist.
 
 ### test-assertions
 
