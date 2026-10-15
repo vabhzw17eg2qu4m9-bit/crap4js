@@ -21,10 +21,11 @@ const W_CRAP = 8;
  * Format the metrics array as a CRAP report string.
  *
  * @param {Array<object>} metrics  MethodMetric array (already sorted or not).
- * @param {{threshold?: number, parseFailures?: string[]}} [opts]
+ * @param {{threshold?: number, parseFailures?: string[], metric?: string}} [opts]
+ *   `metric: 'cognitive'` relabels the complexity column (default label CC).
  * @returns {string}
  */
-export function formatReport(metrics, { threshold, parseFailures } = {}) {
+export function formatReport(metrics, { threshold, parseFailures, metric } = {}) {
   const t = threshold != null ? threshold : 8.0;
   const sorted = [...metrics].sort(compareMetricsForReport);
 
@@ -33,7 +34,7 @@ export function formatReport(metrics, { threshold, parseFailures } = {}) {
     ' ' +
     padRight('File', W_FILE) +
     ' ' +
-    padLeft('CC', W_CC) +
+    padLeft(metric === 'cognitive' ? 'Cogn' : 'CC', W_CC) +
     ' ' +
     padLeft('Cov%', W_COV) +
     ' ' +

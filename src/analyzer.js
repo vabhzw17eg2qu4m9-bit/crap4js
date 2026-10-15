@@ -18,11 +18,13 @@ import { crapScore } from './crapScore.js';
 /**
  * Analyze a set of source files, combining complexity and coverage.
  *
- * @param {{ filePaths: string[], coveragePath: string|null, projectRoot: string }} opts
+ * @param {{ filePaths: string[], coveragePath: string|null, projectRoot: string, metric?: string }} opts
+ *   `metric` selects the complexity scoring: `cyclomatic` (default) or
+ *   `cognitive` (SonarSource v1.2); the chosen value feeds the CRAP formula.
  * @returns {{ metrics: Array<object>, parseFailures: string[] }}
  *   Sorted MethodMetric array plus relative paths of files that failed to parse.
  */
-export function analyze({ filePaths, coveragePath, projectRoot }) {
+export function analyze({ filePaths, coveragePath, projectRoot, metric }) {
   const warn = (msg) => process.stderr.write(`Warning: ${msg}\n`);
   const coverageMap = loadCoverageMap(coveragePath, projectRoot, warn);
 
@@ -34,6 +36,7 @@ export function analyze({ filePaths, coveragePath, projectRoot }) {
       projectRoot,
       coverageMap,
       warn,
+      metric,
     );
     metrics.push(...fileMetrics);
     parseFailures.push(...failures);
@@ -60,12 +63,13 @@ function loadCoverageMap(coveragePath, projectRoot, warn) {
   }
 }
 
-function analyzeFile(file, projectRoot, coverageMap, warn) {
+function analyzeFile(file, projectRoot, coverageMap, warn, metric) {
   const rel = path.relative(projectRoot, file).split(path.sep).join('/');
   let methods;
   try {
     methods = extractMethods(readFileSync(file, 'utf8'), {
       ext: path.extname(file),
+      metric,
     });
   } catch (e) {
     warn(`failed to parse ${rel}: ${e.message}`);

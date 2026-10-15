@@ -131,3 +131,38 @@ test('nestingSummary lines', () => {
     '1/3 methods nested deeper than 5',
   );
 });
+
+// Regression for the upstream nesting-gate false positive (7bf7a15): an
+// `else if` chain is flat — every chained if sits at its originating if's
+// depth — while `if (...) else { if (...) }` keeps paying each level.
+test('else-if chains are flat, not nested', () => {
+  const chain = `
+function classify(x) {
+  if (x < 0) { return 'neg'; }
+  else if (x === 0) { return 'zero'; }
+  else if (x < 10) { return 'small'; }
+  else if (x < 100) { return 'medium'; }
+  else if (x < 1000) { return 'large'; }
+  return 'huge';
+}
+`;
+  // body 1 + the originating if 1 — the four chained ifs add nothing.
+  assert.equal(depthOf(chain), 2);
+});
+
+test('an if nested in an else block is still nesting', () => {
+  const nested = `
+function classify(x) {
+  if (x < 0) { return 'neg'; }
+  else {
+    if (x === 0) { return 'zero'; }
+    else {
+      if (x < 10) { return 'small'; }
+    }
+  }
+  return 'large';
+}
+`;
+  // body 1 + if 1 + else-block if 2 + inner else-block if 3.
+  assert.equal(depthOf(nested), 4);
+});

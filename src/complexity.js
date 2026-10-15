@@ -1,15 +1,16 @@
-// Cyclomatic complexity + method extraction for JavaScript/JSX/Flow/TS source.
+// Cyclomatic + cognitive complexity and method extraction for
+// JavaScript/JSX/Flow/TS source.
 //
 // Uses @babel/parser (plugins routed by file extension — flow and typescript
 // cannot be enabled together) to parse, then walks the AST to find every
 // function-like entry (FunctionDeclaration, class ClassMethod, assigned
-// FunctionExpression or ArrowFunctionExpression) and computes its cyclomatic
-// complexity.
+// FunctionExpression or ArrowFunctionExpression) and computes its complexity
+// (cyclomatic by default, or cognitive — SonarSource v1.2 — via `metric`).
 //
-// Counting rules (base 1, +1 each): IfStatement, ForStatement, ForInStatement,
-// ForOfStatement, WhileStatement, DoWhileStatement, CatchClause, SwitchCase
-// (including `default`), ConditionalExpression, and LogicalExpression (`&&`,
-// `||`).
+// Cyclomatic counting rules (base 1, +1 each): IfStatement, ForStatement,
+// ForInStatement, ForOfStatement, WhileStatement, DoWhileStatement,
+// CatchClause, SwitchCase (including `default`), ConditionalExpression, and
+// LogicalExpression (`&&`, `||`).
 //
 // Lambda/arrow bodies count TOWARDS the enclosing function (we descend into
 // them when computing the parent's complexity). Nested NAMED
@@ -61,13 +62,14 @@ const TS_EXTS = new Set(['.ts', '.tsx']);
  * Parse source and return every method/function entry with its complexity.
  *
  * @param {string} source  JavaScript/JSX/Flow/TypeScript source code.
- * @param {{ ext?: string }} [opts]  File extension used to route the
- *   flow-vs-typescript plugin (`.ts`/`.tsx` → typescript, else flow).
+ * @param {{ ext?: string, metric?: string }} [opts]  File extension used to
+ *   route the flow-vs-typescript plugin (`.ts`/`.tsx` → typescript, else
+ *   flow); `metric` selects `cyclomatic` (default) or `cognitive` scoring.
  * @returns {Array<{name: string, startLine: number, endLine: number, complexity: number}>}
  */
-export function extractMethods(source, { ext } = {}) {
+export function extractMethods(source, { ext, metric } = {}) {
   // Strip the AST node reference — external callers only need the summary.
-  return parseMethods(source, ext).map(({ node, ...m }) => m);
+  return parseMethods(source, ext, metric).map(({ node, ...m }) => m);
 }
 
 /**
@@ -83,11 +85,13 @@ export function extractMethodsWithNodes(source, { ext } = {}) {
   return parseMethods(source, ext);
 }
 
-function parseMethods(source, ext) {
+function parseMethods(source, ext, metric) {
   const ast = parseSource(source, ext);
   const methods = [];
   // @babel/parser wraps the Program in a File node; the walker starts at Program.
   walkForEntries(ast.program, null, methods);
+  const complexityOf = metric === 'cognitive' ? computeCognitive : computeComplexity;
+  for (const m of methods) m.complexity = complexityOf(m.node.body);
   return methods;
 }
 
@@ -252,7 +256,6 @@ function makeMethod(name, fnNode) {
     name,
     startLine: fnNode.loc.start.line,
     endLine: fnNode.loc.end.line,
-    complexity: computeComplexity(fnNode.body),
     node: fnNode,
   };
 }
@@ -276,6 +279,100 @@ function complexityDelta(n) {
   if (COMPLEXITY_TYPES.has(n.type)) return 1;
   if (n.type === 'LogicalExpression' && LOGICAL_OPS.has(n.operator)) return 1;
   return 0;
+}
+
+// ---------- Cognitive complexity (SonarSource v1.2) ----------
+//
+// Unlike cyclomatic complexity the score starts at 0 and tracks how hard a
+// method is to read: +1 per break in the linear flow (if/else-if/else, every
+// loop kind, catch, each switch case including `default`, the conditional
+// expression, each SEQUENCE of identical `&&`/`||` — `a && b && c` is one
+// sequence, `a && b || c` is two) plus a nesting increment of +1 per
+// enclosing structural level for every structural construct. `&&`/`||` never
+// deepen. `else if` chains are flat — each chained if increments at its
+// originating if's depth — while an if inside an else BLOCK still pays
+// nesting. Lambda (function/arrow expression) bodies deepen one level but
+// the lambda itself never increments; nested named FunctionDeclarations are
+// skipped as their own entries.
+
+const COGNITIVE_TYPES = COMPLEXITY_TYPES;
+
+/**
+ * Cognitive complexity of a function body.
+ *
+ * @param {object} body  the function's body node.
+ * @param {{ countLambdas?: boolean }} [opts]  when false, lambda bodies are
+ *   not traversed, so their branches do not count towards the enclosing
+ *   method. Default: true.
+ * @returns {number}
+ */
+export function computeCognitive(body, { countLambdas = true } = {}) {
+  const s = { score: 0 };
+  const visit = (n, depth, seqOp) => {
+    if (!isNode(n) || isNamedFunctionDecl(n)) return;
+    if (lambdaBody(n, depth, countLambdas, visit, s)) return;
+    cognitiveStep(s, n, depth, seqOp, visit);
+  };
+  visit(body, 0, undefined);
+  return s.score;
+}
+
+// Lambdas deepen without incrementing; `countLambdas: false` skips them.
+// Returns true when the node was a lambda (caller stops the generic step).
+function lambdaBody(n, depth, countLambdas, visit) {
+  if (!FUNCTION_LIKE.has(n.type)) return false;
+  if (countLambdas) {
+    for (const c of childrenOf(n)) visit(c, depth + 1, undefined);
+  }
+  return true;
+}
+
+// One flow-break increment per structural node (basic + nesting), one per
+// `&&`/`||` sequence root; then descend.
+function cognitiveStep(s, n, depth, seqOp, visit) {
+  if (COGNITIVE_TYPES.has(n.type)) {
+    structuralStep(s, n, depth, visit);
+    return;
+  }
+  if (isLogicalSeqRoot(n, seqOp)) s.score++;
+  const childOp = n.type === 'LogicalExpression' ? n.operator : undefined;
+  for (const c of childrenOf(n)) visit(c, depth, childOp);
+}
+
+// Structural constructs pay basic + nesting and deepen their subtree;
+// IfStatement gets its own dispatch (flat else-if chains, else increments).
+function structuralStep(s, n, depth, visit) {
+  s.score += 1 + depth;
+  if (n.type === 'IfStatement') {
+    visitIf(s, n, depth, visit);
+    return;
+  }
+  for (const c of childrenOf(n)) visit(c, depth + 1, undefined);
+}
+
+// IfStatement: then and bare `else` each pay the basic-plus-nesting
+// increment and deepen one level. An `else if` chain is flat: the chained
+// if is visited at its originating if's depth — it increments (when its own
+// turn comes) but does not nest.
+function visitIf(s, n, depth, visit) {
+  visit(n.test, depth + 1, undefined);
+  visit(n.consequent, depth + 1, undefined);
+  const alt = n.alternate;
+  if (!alt) return;
+  if (alt.type === 'IfStatement') {
+    visit(alt, depth, undefined);
+    return;
+  }
+  s.score += 1 + depth;
+  visit(alt, depth + 1, undefined);
+}
+
+// Only the ROOT of a same-operator `&&`/`||` sequence increments: the
+// operator of an enclosing logical expression is passed down as `seqOp`.
+function isLogicalSeqRoot(n, seqOp) {
+  return (
+    n.type === 'LogicalExpression' && LOGICAL_OPS.has(n.operator) && seqOp !== n.operator
+  );
 }
 
 export function childrenOf(n) {

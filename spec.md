@@ -33,6 +33,8 @@ crap4js <path>...        Analyze explicit files / directories (expanded).
 crap4js --help           Print this help and exit 0.
 crap4js --coverage <p>   Override coverage file (default: coverage/coverage-final.json).
 crap4js --threshold <n>  Override CRAP threshold (default: 8.0).
+crap4js --metric <m>     Complexity metric: cyclomatic (default) or cognitive;
+                         the chosen value feeds the CRAP formula.
 crap4js --run-tests      Run the test+coverage suite before analyzing.
 crap4js profile [--name <p>] [--threshold <ms>] [--top <N>] [paths...]
                          Run instrumented tests, report per-function timing.
@@ -154,11 +156,45 @@ Arrow / anonymous function-literal bodies are descended into and counted
 toward the enclosing function. Nested NAMED `FunctionDeclaration`s are NOT
 descended into — they are reported as their own entries.
 
+## Complexity metric
+
+`--metric` selects the complexity scoring; the chosen value feeds the CRAP
+formula unchanged (`cyclomatic` by default; invalid values are a usage
+error). The report's complexity column is labeled `CC` for cyclomatic and
+`Cogn` for cognitive.
+
+`cognitive` implements the SonarSource Cognitive Complexity definition
+(v1.2) as closely as the JavaScript grammar allows:
+
+- The score starts at `0` (it is not a path count).
+- `+1` for each break in the linear flow: `if`, `else if`, `else`, every
+  loop kind, `catch`, each `switch` member (`case` and `default`), the
+  conditional expression (`?:`), and each *sequence* of identical `&&`/`||`
+  operators — `a && b && c` is one sequence (+1), `a && b || c` is two (+2).
+- A nesting increment of `+1` per enclosing structural level is added on top
+  of the basic increment for every structural construct (everything above
+  except the logical operators, which never deepen): an `if` inside a loop
+  body scores `2`, in a loop inside an `if` scores `3`, and so on.
+- `else if` chains are flat: each chained `if` increments at the depth of
+  its originating `if`, so a five-way chain scores 5 — while an `if` inside
+  an `else` *block* keeps paying the nesting penalty.
+- Lambda (function/arrow expression) bodies deepen one level but the lambda
+  itself never increments. Nested NAMED `FunctionDeclaration`s are skipped
+  entirely, mirroring cyclomatic.
+
+Upstream mapping: this is crap4dart's `gates.complexity.metric` option;
+crap4js has no config file, so the option is a CLI flag (the port's
+standard surface for gate options).
+
 ## Formula
 
 ```
 CRAP = CC^2 * (1 - coverage)^3 + CC
 ```
+
+`CC` is the value of the selected complexity metric (`--metric`): the
+cyclomatic path count by default, or the cognitive score. The formula itself
+is unchanged.
 
 Verified edge cases (see `test/crapScore.test.js`):
 
@@ -179,6 +215,9 @@ anotherMethod                  rel/other.ext                         2     N/A  
 
 Max CRAP: 18.6 (threshold 8.0) — FAILED
 ```
+
+The complexity column is labeled `CC` (cyclomatic, default) or `Cogn`
+(`--metric cognitive`).
 
 - Sort: numeric CRAP descending; `N/A` entries LAST. Ties broken by
   (file asc, startLine asc) for stable output.

@@ -215,3 +215,67 @@ test('nesting violation over an explicit file exits 2', () => {
     cleanup(root);
   }
 });
+
+const CHAIN_SRC = `function classify(x) {
+  if (x < 0) { return 'neg'; }
+  else if (x === 0) { return 'zero'; }
+  else if (x < 10) { return 'small'; }
+  else if (x < 100) { return 'medium'; }
+  return 'large';
+}
+module.exports = classify;
+`;
+
+test('invalid --metric exits 1', () => {
+  const r = runCli(process.cwd(), ['--metric', 'sonar']);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /Invalid metric: sonar/);
+});
+
+test('--metric cognitive relabels the complexity column; default stays CC', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'crap4js-metric-'));
+  try {
+    mkdirSync(path.join(root, 'src'));
+    writeFileSync(path.join(root, 'src', 'chain.js'), CHAIN_SRC);
+    const cognitive = runCli(root, ['--metric', 'cognitive', 'src/chain.js']);
+    assert.equal(cognitive.status, 0, `stderr: ${cognitive.stderr}`);
+    assert.match(cognitive.stdout, /\bCogn\b/);
+    assert.doesNotMatch(cognitive.stdout, /\bCC\b/);
+    const cyclomatic = runCli(root, ['src/chain.js']);
+    assert.equal(cyclomatic.status, 0, `stderr: ${cyclomatic.stderr}`);
+    assert.match(cyclomatic.stdout, /\bCC\b/);
+    assert.doesNotMatch(cyclomatic.stdout, /\bCogn\b/);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('--metric cognitive feeds the CRAP formula and exits 2', () => {
+  const sourceFile = path.join(tmpdir(), 'crap4js-chain-src.js');
+  writeFileSync(sourceFile, CHAIN_SRC);
+  const root = buildProject({
+    source: sourceFile,
+    coverage: (sourcePath) => ({
+      [sourcePath]: {
+        statementMap: {
+          '0': {
+            start: { line: 1, column: 0 },
+            end: { line: 6, column: 0 },
+          },
+        },
+        s: { '0': 0 },
+      },
+    }),
+  });
+  try {
+    // 4-way else-if chain: Cogn 4 → CRAP 4^2 * 1 + 4 = 20.0 > 8.0
+    // (same fixture under the default metric: CC 5 → 30.0).
+    const r = runCli(root, ['--metric', 'cognitive']);
+    assert.equal(r.status, 2);
+    assert.match(r.stderr, /CRAP threshold exceeded: 20\.0 > 8\.0/);
+    assert.match(r.stdout, /\bCogn\b/);
+  } finally {
+    cleanup(root);
+    rmSync(sourceFile, { force: true });
+  }
+});

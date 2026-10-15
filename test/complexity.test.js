@@ -321,3 +321,23 @@ class A {
   // base 1 + 1 if + 1 ternary = 3 — decorators add nothing
   assert.equal(m.complexity, 3);
 });
+
+// Regression for the upstream cyclomatic blind-spot fix (7bf7a15), mapped to
+// the JS grammar: switch cases (including default) and each `&&`/`||`
+// operator count. JS has no switch expressions, when-guards, or logical
+// patterns — those parts of the upstream fix cannot exist here.
+test('switch cases and logical operators count (CC blind-spot regression)', () => {
+  const src = `
+export function f(a, b, c) {
+  switch (a) {
+    case 1: break;
+    case 2: break;
+    default: break;
+  }
+  return (a || b || c) && (b || c);
+}
+`;
+  const methods = extractMethods(src);
+  // base 1 + 3 switch members + 3 || + 1 && = 8
+  assert.equal(find(methods, 'f').complexity, 8);
+});

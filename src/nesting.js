@@ -26,6 +26,8 @@ const NESTING_TYPES = new Set([
 /**
  * Deepest control-flow nesting of a function body. The body itself is
  * level 1; each nested control-flow construct adds one for its subtree.
+ * An `else if` chain is flat: every chained if lives at the depth of its
+ * originating if, while an if inside an else BLOCK keeps adding levels.
  *
  * @param {object} body  the function's body node.
  * @returns {number}
@@ -36,10 +38,22 @@ export function maxNesting(body) {
     if (!isNode(n)) return;
     const d = NESTING_TYPES.has(n.type) ? depth + 1 : depth;
     if (d > max) max = d;
+    if (n.type === 'IfStatement') {
+      visitIfChildren(n, depth, d, visit);
+      return;
+    }
     for (const c of childrenOf(n)) visit(c, d);
   };
   visit(body, 1);
   return max;
+}
+
+// An `else if` alternate stays at its originating if's depth (flat chain);
+// every other child descends at the if's own level.
+function visitIfChildren(n, depth, d, visit) {
+  for (const c of childrenOf(n)) {
+    visit(c, c === n.alternate && c.type === 'IfStatement' ? depth : d);
+  }
 }
 
 /**

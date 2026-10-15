@@ -8,6 +8,7 @@
 //   crap4js --help           Print this help and exit 0.
 //   crap4js --coverage <p>   Override coverage file (default coverage/coverage-final.json).
 //   crap4js --threshold <n>  Override CRAP threshold (default 8.0).
+//   crap4js --metric <m>     Complexity metric: cyclomatic (default) | cognitive.
 //   crap4js --run-tests      Run `nyc node --test` before analyzing.
 //   crap4js profile [...]    Run instrumented tests and report per-function timing.
 //   crap4js file-naming [...]  Flag mechanical file names (generic/numeric stems).
@@ -65,6 +66,7 @@ import { isMain } from './mainGuard.js';
 
 const DEFAULT_THRESHOLD = 8.0;
 const DEFAULT_COVERAGE = 'coverage/coverage-final.json';
+const METRICS = new Set(['cyclomatic', 'cognitive']);
 
 function usage() {
   return [
@@ -75,6 +77,8 @@ function usage() {
     '  crap4js --help           Print this help message',
     '  crap4js --coverage <p>   Override coverage file (default: ' + DEFAULT_COVERAGE + ')',
     '  crap4js --threshold <n>  Override CRAP threshold (default: ' + DEFAULT_THRESHOLD + ')',
+    '  crap4js --metric <m>     Complexity metric: cyclomatic (default) or cognitive;',
+    '                           the chosen value feeds the CRAP formula',
     '  crap4js --run-tests      Run the test+coverage suite before analyzing',
     '  crap4js profile [--name <p>] [--threshold <ms>] [--top <N>] [paths...]',
     '                           Run instrumented tests and report per-function timing',
@@ -161,6 +165,7 @@ function parseArgs(argv) {
   }
   validateOpts(opts);
   opts.thresholdValue = parseThreshold(opts.threshold);
+  opts.metricValue = parseMetric(opts.metric);
   return opts;
 }
 
@@ -171,6 +176,7 @@ function newOpts() {
     help: false,
     coverage: undefined,
     threshold: undefined,
+    metric: undefined,
     runTests: false,
   };
 }
@@ -184,6 +190,7 @@ function applyArg(opts, argv, i) {
   }
   if (isFlag(a, '--coverage')) return takeValue(opts, 'coverage', a, argv, i);
   if (isFlag(a, '--threshold')) return takeValue(opts, 'threshold', a, argv, i);
+  if (isFlag(a, '--metric')) return takeValue(opts, 'metric', a, argv, i);
   if (a.startsWith('--')) throw new Error(`Unknown flag: ${a}`);
   opts.paths.push(a);
   return i;
@@ -218,6 +225,12 @@ function parseThreshold(threshold) {
     throw new Error(`Invalid threshold: ${threshold}`);
   }
   return n;
+}
+
+function parseMetric(metric) {
+  if (metric === undefined) return 'cyclomatic';
+  if (!METRICS.has(metric)) throw new Error(`Invalid metric: ${metric}`);
+  return metric;
 }
 
 function maxCrap(metrics) {
@@ -267,12 +280,16 @@ function runWithOpts(opts, ctx) {
   }
   const coveragePath = resolveCoveragePath(opts, ctx.cwd);
   const result = tryStep(ctx, () =>
-    analyze({ filePaths: files, coveragePath, projectRoot: ctx.cwd }),
+    analyze({ filePaths: files, coveragePath, projectRoot: ctx.cwd, metric: opts.metricValue }),
   );
   if (result === FAIL) return 1;
   const { metrics, parseFailures } = result;
   ctx.out.write(
-    formatReport(metrics, { threshold: opts.thresholdValue, parseFailures }),
+    formatReport(metrics, {
+      threshold: opts.thresholdValue,
+      parseFailures,
+      metric: opts.metricValue,
+    }),
   );
   return reportVerdict(metrics, opts.thresholdValue, ctx);
 }
