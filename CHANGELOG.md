@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.12.1...v0.13.0) (2026-10-15)
+
+
+### Features
+
+* cognitive complexity metric option (SonarSource), CC blind-spot regression, flat else-if nesting ([#45](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/45)) ([87c9912](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/87c991240fc6caf4c56d1344d14d866a1cc7bba1))
+
 ## [0.12.1](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.12.0...v0.12.1) (2026-10-14)
 
 
