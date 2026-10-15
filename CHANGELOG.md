@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.13.0...v0.14.0) (2026-10-15)
+
+
+### Features
+
+* duplication CPD-parity clones mode, ignore-identifiers/imports, skip-duplicate-files ([#47](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/47)) ([8ecf418](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/8ecf41862cbb5172052d9fd42807dc6db8d332e1))
+
 ## [0.13.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.12.1...v0.13.0) (2026-10-15)
 
 
