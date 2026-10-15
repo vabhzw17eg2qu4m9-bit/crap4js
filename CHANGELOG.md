@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.14.0...v0.15.0) (2026-10-15)
+
+
+### Features
+
+* clones-mode summary carries project-wide duplicated-line percentage ([#49](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/49)) ([e70d72a](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/e70d72a11182cff31060f0f82158034737424cdd))
+
 ## [0.14.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.13.0...v0.14.0) (2026-10-15)
 
 
