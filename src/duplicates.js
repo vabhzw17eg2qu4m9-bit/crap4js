@@ -144,7 +144,8 @@ function scanSet(opts, projectRoot) {
  *   ignoreIdentifiers?: boolean, ignoreImports?: boolean,
  *   skipDuplicateFiles?: boolean}} opts
  * @returns {{violations: Array<{file, line, message}>, checked: number,
- *            checkedLines?: number, dupLines?: number}}
+ *            checkedLines?: number, dupLines?: number,
+ *            totalPercent?: string}}
  */
 export function duplicatesViolations(files, projectRoot, opts) {
   const bags = tokenizeFiles(files, projectRoot, opts);
@@ -637,7 +638,20 @@ function clonesResult(bags, groups) {
         `${locations.length} occurrences: ${shown}${more}`,
     };
   });
-  return { violations, checked: bags.length };
+  return { violations, checked: bags.length, totalPercent: totalPercent(bags) };
+}
+
+// The project-wide duplicated-line percentage over the scanned bags
+// (marked tokens' distinct lines vs total lines, 'NN.NN') — so a
+// clones-mode summary always carries a number too (upstream 0f54f0d).
+function totalPercent(bags) {
+  let checkedLines = 0;
+  let dupLines = 0;
+  for (const bag of bags) {
+    checkedLines += bag.totalLines;
+    dupLines += duplicatedLines(bag).size;
+  }
+  return checkedLines === 0 ? '0.00' : ((dupLines / checkedLines) * 100).toFixed(2);
 }
 
 function duplicatedLines(bag) {
@@ -663,12 +677,14 @@ function violationFor(bag, dupLines, threshold) {
 
 // One-line summaries mirroring the Dart gate: percentage mode reports the
 // tokenized file count and overall duplicated-line percent on pass, the
-// over-threshold file count on fail; clones mode counts accepted groups.
-function duplicatesSummary({ violations, checked, checkedLines, dupLines }, opts) {
+// over-threshold file count on fail; clones mode counts accepted groups
+// and carries the project-wide duplicated-line percent (upstream 0f54f0d).
+function duplicatesSummary({ violations, checked, checkedLines, dupLines, totalPercent }, opts) {
   if (opts.report === 'clones') {
+    const tail = `, ${totalPercent}% duplicated lines`;
     return violations > 0
-      ? `${violations} clone groups (>= ${opts.minTokens} tokens, >= ${opts.minLines} lines)`
-      : `no clones >= ${opts.minLines} lines across ${checked} files`;
+      ? `${violations} clone groups (>= ${opts.minTokens} tokens, >= ${opts.minLines} lines)${tail}`
+      : `no clones >= ${opts.minLines} lines across ${checked} files${tail}`;
   }
   if (violations > 0) {
     return `${violations}/${checked} files over ${opts.threshold}% duplication`;

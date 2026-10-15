@@ -736,7 +736,7 @@ test('--report clones: one violation per clone group with all locations', () => 
       'src/a.js:1: clone: 5 tokens / 2 lines, 2 occurrences: ' +
         'src/a.js:1-2; src/b.js:1-1\n',
     );
-    assert.equal(ctx.lines[1], '1 clone groups (>= 5 tokens, >= 2 lines)\n');
+    assert.equal(ctx.lines[1], '1 clone groups (>= 5 tokens, >= 2 lines), 37.50% duplicated lines\n');
   } finally {
     cleanup(root);
   }
@@ -750,7 +750,32 @@ test('--report clones passes a project without duplicates', () => {
       runDuplicates(['--min-tokens', '5', '--min-lines', '2', '--report', 'clones'], ctx),
       0,
     );
-    assert.equal(ctx.lines[0], 'no clones >= 2 lines across 1 files\n');
+    assert.equal(ctx.lines[0], 'no clones >= 2 lines across 1 files, 0.00% duplicated lines\n');
+  } finally {
+    cleanup(root);
+  }
+});
+
+// The clones summary's percent spans every scanned file (upstream 0f54f0d),
+// not just the violating ones: the pair marks 3 of 8 lines, the clean file
+// adds 6 more — 3/14 = 21.43%, while the pair alone is 37.50% and the
+// per-file average 25.00%.
+test('--report clones summary carries the project-wide duplicated-line percent', () => {
+  const source = ['const header = 1;', ...blockLines(3)].join('\n') + '\n';
+  const clean = ['const c1 = 1;', 'const c2 = 2;', 'const c3 = 3;',
+    'const c4 = 4;', 'const c5 = 5;', 'const c6 = 6;'].join('\n') + '\n';
+  const root = fixture({ 'src/a.js': source, 'src/b.js': source, 'src/c.js': clean });
+  try {
+    const ctx = fakeCtx(root);
+    assert.equal(
+      runDuplicates(['--min-tokens', '5', '--min-lines', '2', '--report', 'clones'], ctx),
+      2,
+    );
+    assert.equal(ctx.lines.length, 2);
+    assert.equal(
+      ctx.lines[1],
+      '1 clone groups (>= 5 tokens, >= 2 lines), 21.43% duplicated lines\n',
+    );
   } finally {
     cleanup(root);
   }
@@ -780,7 +805,7 @@ test('clone groups are ordered by occurrence count, then position', () => {
     );
     assert.match(ctx.lines[0], /3 occurrences: src\/w\.js:1-2; src\/x\.js:1-1; src\/y\.js:1-1/);
     assert.match(ctx.lines[1], /2 occurrences: src\/a\.js:1-2; src\/b\.js:1-1/);
-    assert.equal(ctx.lines[2], '2 clone groups (>= 5 tokens, >= 2 lines)\n');
+    assert.equal(ctx.lines[2], '2 clone groups (>= 5 tokens, >= 2 lines), 28.00% duplicated lines\n');
   } finally {
     cleanup(root);
   }
@@ -851,7 +876,7 @@ ${name}(['a'], '-');
       /^src\/a\.js:\d+: clone: 10 tokens \/ 2 lines, 4 occurrences: src\/a\.js:\d+-\d+; /,
     );
     assert.match(on.lines[0], /src\/b\.js:\d+-\d+/);
-    assert.equal(on.lines[1], '1 clone groups (>= 10 tokens, >= 2 lines)\n');
+    assert.equal(on.lines[1], '1 clone groups (>= 10 tokens, >= 2 lines), 31.82% duplicated lines\n');
   } finally {
     cleanup(root);
   }
@@ -882,7 +907,7 @@ test('--ignore-imports drops import statements from tokenization', () => {
       runDuplicates(['--min-tokens', '30', '--min-lines', '2', '--report', 'clones', '--ignore-imports'], on),
       0,
     );
-    assert.equal(on.lines[0], 'no clones >= 2 lines across 0 files\n');
+    assert.equal(on.lines[0], 'no clones >= 2 lines across 0 files, 0.00% duplicated lines\n');
   } finally {
     cleanup(root);
   }
@@ -946,7 +971,7 @@ test('--ignore-imports drops pure re-export boilerplate whole', () => {
       runDuplicates(['--min-tokens', '5', '--min-lines', '2', '--report', 'clones', '--ignore-imports'], on),
       0,
     );
-    assert.equal(on.lines[0], 'no clones >= 2 lines across 0 files\n');
+    assert.equal(on.lines[0], 'no clones >= 2 lines across 0 files, 0.00% duplicated lines\n');
   } finally {
     cleanup(root);
   }
@@ -994,7 +1019,7 @@ test('--skip-duplicate-files passes where every file is a copy', () => {
       runDuplicates(['--min-tokens', '5', '--min-lines', '2', '--report', 'clones', '--skip-duplicate-files'], on),
       0,
     );
-    assert.equal(on.lines[0], 'no clones >= 2 lines across 1 files\n');
+    assert.equal(on.lines[0], 'no clones >= 2 lines across 1 files, 0.00% duplicated lines\n');
   } finally {
     cleanup(root);
   }

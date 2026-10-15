@@ -600,8 +600,11 @@ semantics. Upstream's default generated-file excludes (`**.g.dart`,
 map to and are not ported. Files with fewer than `--min-tokens` tokens
 are skipped from the scan; the summary counts only tokenized files —
 percentage mode: `N files, X.XX% duplicated lines` on pass, `M/N files
-over T% duplication` on fail; clones mode: `no clones >= L lines across
-N files` on pass, `K clone groups (>= T tokens, >= L lines)` on fail.
+over T% duplication` on fail; clones mode (upstream 0f54f0d): `no clones
+>= L lines across N files, X.XX% duplicated lines` on pass, `K clone
+groups (>= T tokens, >= L lines), X.XX% duplicated lines` on fail, where
+X.XX is the same project-wide duplicated-line percent the percentage
+mode computes.
 Exit 2 iff violations exist.
 
 ### test-assertions
