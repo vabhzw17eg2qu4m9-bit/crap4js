@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.15.0...v0.16.0) (2026-10-20)
+
+
+### Features
+
+* **similarity:** file-level near-duplicate gate + command ([#51](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/51)) ([b007ba0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/b007ba0287cccbfb47397158c242f6a0dcc62bf8))
+
 ## [0.15.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.14.0...v0.15.0) (2026-10-15)
 
 
