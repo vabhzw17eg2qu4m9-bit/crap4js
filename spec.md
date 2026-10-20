@@ -754,6 +754,80 @@ the confirmed outcome is reported and cached. The mutant test runner
 receives the resolved per-site invocation arguments; the summary appends
 `; test-scoped N (M re-confirmed killed)` when scoping ran.
 
+### similarity
+
+Port of the crap4dart 0.15.0 similarity engine and command (upstream
+spec §11.23, commit 2b21966), parser-free and language-agnostic:
+
+```
+crap4js similarity [--format console|json] [--jaccard N]
+                   [--containment N] [--min-shingles N]
+                   [--include GLOB]... [--exclude GLOB]... [paths...]
+```
+
+Each scanned file is normalized by its extension profile before any
+comparison. `markdown` (`.md`, `.markdown`, `.mdx`) drops fenced code
+blocks (``` / ~~~ toggling, both markers interchangeable) and keeps the
+trimmed prose lines joined with spaces; single characters and punctuation
+drop out at tokenization. `code` (25 source extensions from `.dart` to
+`.sql`) strips block comments line-wise (an unterminated `/*` carries
+across lines; text after a closing `*/` re-joins), drops line comments
+(`//`, `#`, `--`, `;`) and import-family lines (`import`/`export`/
+`part`/`library`, `from`/`require`/`require_once`/`using`/`package`/
+`include`, shebangs), then tokenizes to identifiers (lowercased) and
+quoted strings/numbers mapped to the `S`/`N` placeholders — clones
+differing only in literal values still match. Any other extension is
+`raw`: content passes through, compared with the prose word tokenizer
+(latin+cyrillic runs of 2+ characters, lowercased). One profile per
+file, exactly upstream: no JS-specific parser is involved, so the same
+scan covers mixed-language corpora.
+
+Shingles are 8 consecutive comparison tokens joined with the unit
+separator (upstream's `\u001f`); files with fewer than 8 tokens produce
+no shingles and are skipped as `skipped` once below `--min-shingles`
+(default 50). Pairs are compared by Jaccard (intersection over union)
+and containment (intersection over the smaller set): a pair crosses when
+EITHER metric meets its threshold (`--jaccard` 0.8, `--containment` 0.95
+— the upstream gate template defaults; containment catches a small file
+largely copied into a big one, where Jaccard stays low). Crossing pairs
+sort by Jaccard descending; transitive closure over the pairs (union-find
+with path compression upstream, plain find here — same clusters) merges
+them into clusters of 2+ files, largest first. `metricsFor` reports each
+file's strongest (highest-Jaccard) pair metrics for the per-file console
+lines.
+
+Scan set: `dirs` (default `['.']`) walked recursively, include globs
+(default `**/*.md`) and exclude globs (default `.git/**`,
+`node_modules/**`, `build/**`, `coverage/**` — upstream's list minus
+`.dart_tool/**`, which has no JS counterpart) matched against
+project-relative paths. Positional paths override the dirs: one existing
+directory becomes the scan root itself (`dirs: ['.']`), several paths
+are subdirectories of the project root, none uses the defaults —
+upstream's `_scanTargets` semantics. Upstream reads the same knobs as
+flat YAML keys under the similarity gate — crap4js has no config, so
+they are kebab-case CLI flags; unknown/invalid values are usage errors
+(exit 1), mirroring the upstream loader's strict validation.
+
+Upstream ships this as an opt-in config gate (`enabled: false`,
+violations fail `check` with exit 2) PLUS the ad-hoc `similarity`
+command (always exit 0). crap4js has no gate framework or check
+pipeline — every gate here is a subcommand — so the port is the
+command: informational only, ALWAYS exits 0, clean or dirty; the
+one-violation-per-clustered-file gate rendering has no separate surface
+(the console cluster listing carries the same per-file metrics). Console
+output: a `similarity: N files scanned (M skipped below K shingles),
+thresholds jaccard >= J / containment >= C` header, then either
+`no similar files` or one `cluster i — F files:` block listing each file
+as `path (jaccard X.XX, containment Y.YY)`, then the
+`F files in C clusters` summary. `--format json` prints
+`{scanned, skipped, thresholds: {jaccard, containment, min_shingles},
+pairs: [{a, b, jaccard, containment}], clusters: [{files}]}` with pair
+metrics rounded to 4 decimals and stdout kept JSON-only.
+
+Dogfooding matches upstream: the port's own md corpus (README, spec,
+CHANGELOG) measures clean at jaccard 0.6 / containment 0.9 and still at
+0.5/0.85.
+
 ### not ported from 0.7–0.9 (no crap4js equivalent)
 
 - `broken_goldens` gate + tofu detector + `goldens-guard` command —

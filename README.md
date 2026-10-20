@@ -75,6 +75,11 @@ crap4js duplicates [--threshold N] [--min-tokens N] [--min-lines N]
                    [--exclude GLOB]... [--source PATH]... [paths...]
                    Flag duplicated token windows within/across files;
                    clones mode reports one violation per clone group.
+crap4js similarity [--format console|json] [--jaccard N]
+                   [--containment N] [--min-shingles N]
+                   [--include GLOB]... [--exclude GLOB]... [paths...]
+                   Scan for near-duplicate files and print similarity
+                   clusters; informational — always exits 0.
 crap4js test-assertions [paths...]
                          Flag test()/it() bodies with zero assertion calls.
 crap4js folder-structure Flag src/ directories with loose direct files.
@@ -101,11 +106,12 @@ usage error.
 
 The gate-check subcommands (`file-naming`, `nesting`, `class-size`,
 `weight-of-class`, `unused-code`, `unused-files`, `banned-imports`,
-`magic-constants`, `duplicates`, `test-assertions`, `folder-structure`,
-`mutation`) are ports of
+`magic-constants`, `duplicates`, `similarity`, `test-assertions`,
+`folder-structure`, `mutation`) are ports of
 crap4dart gates. crap4js has no gate framework or config
 file, so each gate is a subcommand with its default thresholds and the
-shared exit-code contract: `0` pass/skip, `1` usage error, `2` violations.
+shared exit-code contract: `0` pass/skip, `1` usage error, `2` violations
+(`similarity` is informational and always exits 0 — see its section).
 
 ### Example
 
@@ -493,6 +499,54 @@ reported and cached. The summary appends
 Mutation testing runs the test suite once per mutant — expensive — so
 like every gate here it only runs when invoked as the `mutation`
 subcommand (upstream: disabled by default). Enable it on fast suites.
+
+## `similarity`
+
+`crap4js similarity [...]` (port of crap4dart's 0.15.0 similarity
+engine + command, upstream spec §11.23, commit 2b21966) scans a text
+corpus for near-duplicate FILES — copied docs that drifted apart, twin
+templates, stale snapshot copies, generated files duplicating their
+sources. Unlike `duplicates` (token-level clone blocks inside source),
+a match means "this file is (mostly) a copy of that file" — reuse,
+generate or delete, not extract-method.
+
+```
+crap4js similarity [--format console|json] [--jaccard N]
+                   [--containment N] [--min-shingles N]
+                   [--include GLOB]... [--exclude GLOB]... [paths...]
+```
+
+Detection is parser-free and language-agnostic. Each file is normalized
+by its profile — markdown (`.md`/`.markdown`/`.mdx`) drops fenced code
+blocks and keeps the prose words; code (25 source extensions) strips
+comments and import-family lines, lowercases identifiers and maps
+string/number literals to `S`/`N` placeholders; anything else compares
+as-is. The normalized token stream is cut into 8-token shingles; file
+pairs are compared by Jaccard (intersection over union) and containment
+(how much of the smaller file the larger one reproduces — catches a
+small file copied into a big one). A pair is reported when EITHER metric
+meets its threshold; transitively connected pairs merge into clusters
+(union-find), largest first.
+
+Defaults mirror the upstream gate template (`gates.similarity` in
+crap4dart.yaml — crap4js has no config file, so they are kebab-case CLI
+flags): include `**/*.md`, exclude `.git/** node_modules/** build/**
+coverage/**`, `--min-shingles 50` (files below the floor are skipped),
+`--jaccard 0.8`, `--containment 0.95`. Positional paths override the
+scan dirs: one existing directory becomes the scan root, several paths
+are subdirectories of the project root.
+
+The command is upstream's ad-hoc exploration tool for tuning the
+thresholds — upstream pairs it with a config gate (`enabled: false` by
+default); crap4js has no gate framework, so nothing runs unless invoked
+and the command is informational: it ALWAYS exits 0, clean or dirty.
+Flag validation errors are usage errors (exit 1). `--format json` prints
+`{scanned, skipped, thresholds, pairs, clusters}` (thresholds echoed as
+`jaccard`/`containment`/`min_shingles`, pair metrics rounded to 4
+decimals) with stdout kept JSON-only.
+
+The repo's own md corpus measures clean at the dogfood thresholds
+(jaccard 0.6 / containment 0.9) — and still at 0.5/0.85.
 
 ## `skill`
 
