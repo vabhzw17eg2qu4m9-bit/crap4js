@@ -4,6 +4,7 @@
 [![version](https://img.shields.io/github/v/release/vabhzw17eg2qu4m9-bit/crap4js?label=version)](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/releases)
 ![CRAP](badges/crap.svg)
 ![coverage](badges/coverage.svg)
+![memory churn](badges/memory.svg)
 
 **CRAP (Change Risk Anti-Patterns) metric for JavaScript.**
 
@@ -98,7 +99,8 @@ crap4js mutation [--min-score N] [--max-survivors N]
                  its file's derived test files (scoped kills cache as
                  kills; survivors are re-confirmed against the full
                  suite).
-crap4js memory [--top N] [--format console|json] [paths...]
+crap4js memory [--top N] [--format console|json] [--badge PATH]
+                          [--badge-threshold MB] [paths...]
                           Run the test suite under node --trace-gc and
                           report per-test allocation churn and heap
                           growth (informational — always exits 0).
@@ -214,36 +216,56 @@ dominates there; read the CALLS/TOTAL deltas instead.
 
 ## `memory`
 
-`crap4js memory [--top N] [--format console|json] [paths...]` runs the test
-suite under `node --trace-gc` and reports per-test allocation churn and heap
-growth (ported from crap4dart 3bae178, phase 1). Each test file runs in its
-own sequential child process (`node --trace-gc --test --test-reporter=tap
-<file>` one file at a time — the concurrency=1 of this port), so the process
-boundary is the file attribution; GC rows are attributed to individual tests
-through TAP spans plus one global clock offset voted across files at the
-90th percentile (last GC of the file minus end of its last test). Loading
-GCs (before a file's first test start) count toward file totals only; nested
-windows resolve to the shorter span.
+`crap4js memory [--top N] [--format console|json] [--badge PATH]
+[--badge-threshold MB] [paths...]` runs the test suite under `node
+--trace-gc` and reports per-test allocation churn and heap growth (ported
+from crap4dart 3bae178, phase 1; hardened per 11551739c8, phase 2). Each
+test file runs in its own sequential child process (`node --trace-gc
+--test --test-reporter=tap <file>` one file at a time — the concurrency=1
+of this port), so the process boundary is the file attribution. Every
+child owns its GC clock: its zero is measured from the file's own first
+row (stderr streams unbuffered — the analog of upstream's suite event
+time marking the isolate-clock zero), and test windows are tiled back
+from the TAP burst (the child's exit) with real `duration_ms` values.
+Only rows INSIDE a test window are trusted: loading rows (module
+compilation), teardown rows, and the runner process's own rows land in a
+separate unattributed bucket that never pollutes file totals; the report
+carries the bucket. There is no global clock offset — the per-child zero
+replaced phase 1's p90 offset vote, exactly as upstream replaced its
+global calibration. The tiled windows are disjoint; a shared tile edge
+attributes to the earlier test.
 
 ```
-memory: 374 tests, 118 GCs, churn 160.6 MB reclaimed, heap -160.6 MB, clock offset -45.0 ms
+memory: 382 tests, 186 GCs, churn 194.9 MB reclaimed, heap -194.9 MB
+unattributed (loading/teardown/runner rows): 111 GCs, 53.4 MB
 
-top 8 by allocation churn (reclaimed heap MB):
+top 3 by allocation churn (reclaimed heap MB):
   GCs  churn MB  growth MB  test
-    9       22.9       -22.9  magic-constants over the repo itself finds no violations
-    8       17.3       -17.3  unused-code over the repo itself finds no violations
+   12       39.9       -39.9  test-assertions over the repo itself finds no violations
 ```
+
+`--badge <path>` writes a shields-style `memory churn | <N> MB` SVG of
+the suite total: green at or below `--badge-threshold` MB (default 500),
+yellow at most twice it, red beyond. `badges/memory.svg` in this repo
+tracks crap4js's own suite and is refreshed by running the command
+manually (self-analysis) — the commit-badges workflow does NOT
+regenerate it (it only refreshes the CRAP/coverage badges).
 
 Honest semantics: `node --trace-gc` exposes one whole-heap counter pair per
 collection (used before → after), no generation split, so upstream's
 new-gen churn / old-gen growth pair collapses to **churn** (Σ reclaimed
 heap MB, clamped at 0 per collection) and **heap growth** (Σ signed MB —
 positive, never-freed growth is the leak suspect). Churn totals are a
-function of the code (stable across runs at file level to ~±1%; GC counts
-are machine-dependent) — churn is the future gate metric, never counts.
+function of the code (stable across runs at file level to ~±1% for files
+with real churn; sub-MB files can flip a single boundary row between a
+window and the bucket — GC counts are machine-dependent) — churn is the
+future gate metric, never counts. Most of this suite's churn happens
+during module loading and is honestly unattributed (upstream's shape
+too: only in-window rows count toward files).
 
 `--format json` prints the report as JSON on stdout (progress goes to
-stderr). The command is informational and always exits 0 (1 on usage
+stderr) with `unattributedCount` / `unattributedChurnMb` alongside the
+totals. The command is informational and always exits 0 (1 on usage
 errors); thresholds and a gate come separately.
 
 ## `file-naming`

@@ -17,23 +17,37 @@
 //   churnMb      Σ max(0, usedBefore − usedAfter) — reclaimed heap volume
 //   heapGrowthMb Σ (usedAfter − usedBefore)       — signed retained growth
 // Rows of the runner process itself (`node --test` supervisor, its own
-// pid) are excluded — the analog of upstream's test_suite isolate
-// filter. Churn totals are a function of the code under test
+// pid) are unattributed bucket rows — the analog of upstream's
+// unmatched-isolate rows. Churn totals are a function of the code under test
 // (deterministic, the future gate metric); GC counts are not.
 //
-// Clocks: trace-gc timestamps are ms since the child process started;
-// TAP spans get wall-clock ends from line-arrival times. One GLOBAL
-// offset (gc clock − reporter clock) is voted per file by
-// (last child GC − end of its last test) at the 90th percentile —
-// upstream's exact mechanism, absorbing the spawn→V8-init latency. A
-// loading GC (before a file's first test start) counts toward file
-// totals only; nested windows resolve to the shorter span.
+// Clocks and trust: trace-gc timestamps are ms since the CHILD process
+// started — every file owns its clock (the analog of upstream phase 2's
+// per-isolate clocks). Its zero is measured, not voted: the child's
+// stderr rows stream unbuffered, so the first row's (arrival − ts) is
+// the clock zero in wall time — the analog of upstream's suite event
+// time marking the same zero. TAP ok-lines, by contrast, arrive in one
+// buffered burst at child exit, so test windows are tiled back from the
+// burst with real duration_ms values. Only rows INSIDE a test window
+// are trusted; loading/teardown rows and the runner process's own rows
+// land in an UNATTRIBUTED bucket that never pollutes file totals — the
+// report carries the bucket separately. There is no global clock offset
+// to calibrate: the per-child zero made phase 1's p90 vote machinery
+// dead weight (removed, matching upstream). Rows cannot straggle across
+// files (each child's pipes are read separately, rows stamped with the
+// child pid) — upstream's seq-continuation guard has no analog here.
+// Tiled windows are disjoint; a shared tile edge attributes to the
+// earlier test.
+//
+// `--badge <path>` (+ `--badge-threshold MB`, default 500) writes a
+// shields-style 'memory churn' SVG of the suite total.
 //
 // Informational: always exits 0; usage errors exit 1.
 
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import {
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -44,6 +58,7 @@ import {
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { applyGateArg } from './gateCommon.js';
+import { badgeColorFor, renderBadgeSvg } from './badgeSvg.js';
 
 const DEFAULT_TOP = 20;
 const DEFAULT_SUITE_DIR = 'test';
@@ -157,31 +172,42 @@ export class TapSpans {
 }
 
 /**
- * The full memory report of one profiled suite run.
+ * The full memory report of one profiled suite run. Totals span every
+ * parsed row; file/test totals carry only window-attributed rows — the
+ * difference is the unattributed bucket (loading, teardown, inter-test
+ * gaps, runner-process rows), reported but never polluting files.
  *
  * @param {Array<{file: string, spawnWallMs: number, runnerPid: number,
  *   gcs: object[], spans: object[]}>} runs  one entry per profiled file
  * @param {string} root  directory report labels are relative to
  */
 export function buildReport(runs, root) {
-  const offset = globalOffset(runs);
   const suites = [];
   const tests = [];
-  let totalGcs = 0;
+  const unattributed = [];
+  let allRows = [];
   for (const run of runs) {
-    const childGcs = childRows(run);
-    totalGcs += childGcs.length;
+    const { child, runner } = splitRows(run);
+    allRows = allRows.concat(child, runner);
+    unattributed.push(...runner);
     const suite = {
       label: path.relative(root, run.file),
-      gcs: childGcs.length,
-      churnMb: sumMb(childGcs, reclaimedMb),
-      growthMb: sumMb(childGcs, heapDeltaMb),
+      gcs: 0,
+      churnMb: 0,
+      growthMb: 0,
     };
     suites.push(suite);
-    const order = run.spans
+    // The child's GC-clock zero in wall time, measured from its own
+    // first row (stderr streams unbuffered) — the analog of upstream's
+    // suite event time marking the isolate-clock zero. No cross-file
+    // vote exists: each file's clock is its own.
+    const zeroMs = child.length
+      ? child[0].arrWallMs - child[0].tsMs
+      : run.spawnWallMs;
+    const placed = placeSpans(run.spans);
+    const order = placed
       .map((_, i) => i)
-      .sort((a, b) => run.spans[a].startMs - run.spans[b].startMs);
-    const firstStart = order.length ? run.spans[order[0]].startMs : Infinity;
+      .sort((a, b) => placed[a].startMs - placed[b].startMs);
     const entries = run.spans.map((span) => ({
       label: span.name,
       suite: suite.label,
@@ -191,75 +217,91 @@ export function buildReport(runs, root) {
       churnMb: 0,
       growthMb: 0,
     }));
-    for (const gc of childGcs) {
-      const gcMs = run.spawnWallMs + gc.tsMs - offset;
-      if (gcMs < firstStart) continue; // loading GC: file total only
-      const i = spanIndexAt(run.spans, order, gcMs);
-      if (i < 0) continue;
+    for (const gc of child) {
+      const i = spanIndexAt(placed, order, zeroMs + gc.tsMs);
+      if (i < 0) {
+        unattributed.push(gc); // loading / teardown row
+        continue;
+      }
+      suite.gcs += 1;
+      suite.churnMb += reclaimedMb(gc);
+      suite.growthMb += heapDeltaMb(gc);
       entries[i].gcs += 1;
       entries[i].churnMb = round1(entries[i].churnMb + reclaimedMb(gc));
       entries[i].growthMb = round1(entries[i].growthMb + heapDeltaMb(gc));
     }
+    suite.churnMb = round1(suite.churnMb);
+    suite.growthMb = round1(suite.growthMb);
     tests.push(...entries);
   }
   return {
     testCount: tests.filter((t) => t.type === TEST_TYPE).length,
-    gcCount: totalGcs,
-    totalChurnMb: round1(suites.reduce((n, s) => n + s.churnMb, 0)),
-    totalHeapGrowthMb: round1(suites.reduce((n, s) => n + s.growthMb, 0)),
-    clockOffsetMs: round1(offset),
+    gcCount: allRows.length,
+    totalChurnMb: round1(allRows.reduce((n, gc) => n + reclaimedMb(gc), 0)),
+    totalHeapGrowthMb: round1(allRows.reduce((n, gc) => n + heapDeltaMb(gc), 0)),
+    unattributedCount: unattributed.length,
+    unattributedChurnMb: round1(
+      unattributed.reduce((n, gc) => n + reclaimedMb(gc), 0),
+    ),
     suites,
     tests,
   };
 }
 
-// The run's test-child rows: everything whose pid differs from the
-// runner process's own (the analog of upstream's test_suite isolate
-// filter). Process-boundary insurance: a topology that stamps every row
-// with the runner pid (in-process isolation) must not fabricate zero
-// churn — when the discriminator empties a non-empty set, keep the rows.
-function childRows(run) {
-  const rows = run.gcs.filter((g) => g.pid !== run.runnerPid);
-  return rows.length > 0 || run.gcs.length === 0 ? rows : run.gcs;
-}
-
-// One GLOBAL offset (gc clock − reporter wall clock), voted per file by
-// (last child GC − end of its last test) at the 90th percentile. A file
-// whose last GC fires before its last test ends votes below the truth;
-// teardown GCs vote above it — the p90 sits just under the truth and
-// ignores both tails. Files without GCs or spans cast no vote.
-function globalOffset(runs) {
-  const votes = [];
-  for (const run of runs) {
-    const childGcs = childRows(run);
-    if (childGcs.length === 0 || run.spans.length === 0) continue;
-    const lastGc = Math.max(...childGcs.map((g) => g.tsMs));
-    const lastEnd = Math.max(...run.spans.map((s) => s.endMs));
-    votes.push(run.spawnWallMs + lastGc - lastEnd);
+// The run's rows split into test-child rows and true runner-process
+// rows. Test-child = everything whose pid differs from the runner
+// process's own (the analog of upstream's test_suite isolate filter).
+// Process-boundary insurance: a topology that stamps every row with the
+// runner pid (in-process isolation) must not fabricate zero churn —
+// when the discriminator empties a non-empty set, the rows stay
+// test-child rows (and the bucket stays empty).
+function splitRows(run) {
+  const child = run.gcs.filter((g) => g.pid !== run.runnerPid);
+  if (child.length > 0) {
+    return { child, runner: run.gcs.filter((g) => g.pid === run.runnerPid) };
   }
-  if (votes.length === 0) return 0;
-  votes.sort((a, b) => a - b);
-  return votes[Math.min(Math.floor(votes.length * 0.9), votes.length - 1)];
+  // Insurance: every row stamped with the runner pid (in-process
+  // isolation) — keep them all as test-child rows rather than
+  // fabricating zero churn; the bucket stays empty.
+  return { child: run.gcs, runner: [] };
 }
 
-// The span whose window contains gcMs, preferring the smallest —
-// upstream's nested-window rule.
-function spanIndexAt(spans, order, ms) {
-  let best = -1;
-  let bestWidth = Infinity;
+// TAP ok-lines arrive in one buffered burst at child exit (the
+// supervisor reprints the child's TAP only at the end), so arrival
+// times carry no per-test placement — but durations are real, tests run
+// sequentially, and the burst lands at the child's exit. So the windows
+// are tiled back from the last arrival with real durations. This is the
+// reduced form that replaces phase 1's global p90 offset vote: per-file
+// anchoring only, nothing cross-file. ponytail: describe-nested spans
+// tile flat (inner windows sit before the enclosing suite's), so
+// per-test grain under describe is approximate — the row still counts
+// toward its file.
+function placeSpans(spans) {
+  const order = spans
+    .map((_, i) => i)
+    .sort((a, b) => spans[a].endMs - spans[b].endMs);
+  const placed = new Array(spans.length);
+  let cursor = order.length ? spans[order[order.length - 1]].endMs : 0;
+  for (let k = order.length - 1; k >= 0; k--) {
+    const i = order[k];
+    const end = Math.min(cursor, spans[i].endMs);
+    placed[i] = { startMs: end - (spans[i].endMs - spans[i].startMs), endMs: end };
+    cursor = placed[i].startMs;
+  }
+  return placed;
+}
+
+// The span whose window contains rowMs. Upstream resolves overlaps to
+// the narrower window; here the windows are tiled disjointly
+// (placeSpans), so the first containing window in execution order IS
+// the narrower rule's outcome — a shared tile edge attributes to the
+// earlier test.
+function spanIndexAt(placed, order, rowMs) {
   for (const i of order) {
-    const s = spans[i];
-    const width = s.endMs - s.startMs;
-    if (ms >= s.startMs && ms <= s.endMs && width < bestWidth) {
-      best = i;
-      bestWidth = width;
-    }
+    const s = placed[i];
+    if (rowMs >= s.startMs && rowMs <= s.endMs) return i;
   }
-  return best;
-}
-
-function sumMb(gcs, metric) {
-  return round1(gcs.reduce((n, gc) => n + metric(gc), 0));
+  return -1;
 }
 
 function round1(v) {
@@ -309,7 +351,9 @@ function profileFile(file, cwd, execPath) {
           const line = pump.buf.slice(0, i);
           pump.buf = pump.buf.slice(i + 1);
           const gc = parseGcLine(line);
-          if (gc) gcs.push(gc);
+          // arrWallMs: live arrival — stderr rows stream unbuffered, so
+          // (arrWallMs − tsMs) measures the child's clock zero directly.
+          if (gc) gcs.push({ ...gc, arrWallMs: Date.now() });
           tap.addLine(Date.now(), line);
         }
       });
@@ -412,19 +456,33 @@ function jsFilesUnder(dir) {
   return found;
 }
 
-const VALUE_FLAGS = { '--top': 'top', '--format': 'format' };
-const NUMBER_FLAGS = new Set(['--top']);
+const VALUE_FLAGS = {
+  '--top': 'top',
+  '--format': 'format',
+  '--badge': 'badge',
+  '--badge-threshold': 'badgeThreshold',
+};
+const NUMBER_FLAGS = new Set(['--top', '--badge-threshold']);
+const DEFAULT_BADGE_THRESHOLD = 500;
 
 /**
- * Parse `memory` arguments into `{ top, format, paths }`. Value flags
- * may be written `--flag VALUE` or `--flag=VALUE`; `--top` is a
- * positive integer, `--format` is `console` (the default) or `json`.
- * Invalid values throw (the CLI reports a usage error).
+ * Parse `memory` arguments into
+ * `{ top, format, badge, badgeThreshold, paths }`. Value flags may be
+ * written `--flag VALUE` or `--flag=VALUE`; `--top` is a positive
+ * integer, `--format` is `console` (the default) or `json`,
+ * `--badge-threshold` a non-negative number (default 500). Invalid
+ * values throw (the CLI reports a usage error).
  *
  * @param {string[]} argv
  */
 export function parseMemoryArgs(argv) {
-  const opts = { top: DEFAULT_TOP, format: 'console', paths: [] };
+  const opts = {
+    top: DEFAULT_TOP,
+    format: 'console',
+    badge: null,
+    badgeThreshold: DEFAULT_BADGE_THRESHOLD,
+    paths: [],
+  };
   for (let i = 0; i < argv.length; i++) {
     i = applyGateArg(opts, argv[i], argv, i, VALUE_FLAGS, NUMBER_FLAGS);
   }
@@ -434,6 +492,8 @@ export function parseMemoryArgs(argv) {
   if (!Number.isInteger(opts.top) || opts.top < 1) {
     throw new Error(`Invalid --top: ${opts.top}`);
   }
+  // --badge-threshold needs no extra validation: it is a number flag,
+  // and applyGateArg's toGateNumber already rejects NaN and negatives.
   const stray = opts.paths.find((p) => p.startsWith('--'));
   if (stray) throw new Error(`unknown flag: ${stray}`);
   return opts;
@@ -472,7 +532,22 @@ export function runMemory(argv, ctx) {
   } else {
     printConsole(report, opts.top, ctx.out);
   }
+  writeBadge(report, opts, ctx);
   return 0; // informational — thresholds come separately
+}
+
+// Writes the shields-style churn badge when --badge was given.
+function writeBadge(report, opts, ctx) {
+  if (!opts.badge) return;
+  const color = badgeColorFor(report.totalChurnMb, opts.badgeThreshold);
+  const svg = renderBadgeSvg(
+    'memory churn',
+    `${Math.round(report.totalChurnMb)} MB`,
+    color,
+  );
+  mkdirSync(path.dirname(opts.badge), { recursive: true });
+  writeFileSync(opts.badge, svg);
+  ctx.err.write(`memory: badge written to ${opts.badge}\n`);
 }
 
 function printConsole(report, top, out) {
@@ -480,9 +555,15 @@ function printConsole(report, top, out) {
   out.write(
     `memory: ${report.testCount} tests, ${report.gcCount} GCs, ` +
       `churn ${report.totalChurnMb.toFixed(1)} MB reclaimed, ` +
-      `heap ${growth >= 0 ? '+' : ''}${growth.toFixed(1)} MB, ` +
-      `clock offset ${report.clockOffsetMs.toFixed(1)} ms\n`,
+      `heap ${growth >= 0 ? '+' : ''}${growth.toFixed(1)} MB\n`,
   );
+  if (report.unattributedCount > 0) {
+    out.write(
+      `unattributed (loading/teardown/runner rows): ` +
+        `${report.unattributedCount} GCs, ` +
+        `${report.unattributedChurnMb.toFixed(1)} MB\n`,
+    );
+  }
   out.write('\ntop ' + top + ' by allocation churn (reclaimed heap MB):\n');
   printTable(byDesc(report.tests, 'churnMb').slice(0, top), out);
   out.write('\ntop ' + top + ' by heap growth (leak suspects first):\n');

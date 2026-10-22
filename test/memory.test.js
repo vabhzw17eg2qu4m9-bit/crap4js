@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import {
   parseGcLine,
@@ -46,14 +46,14 @@ function tapOk(name, num, durationMs, endMs, { indent = '', result = 'ok', type 
 }
 
 // Builds a run record from [wallMs, line] pairs — the same data the
-// live capture sees, with a hand-picked clock layout (GC timestamps are
-// ms since child start; TAP times are wall-clock arrivals).
+// live capture sees: GC rows carry their live arrival (arrWallMs),
+// TAP ok-lines arrive in one buffered burst at child exit.
 function runFromLines(file, pairs, spawnWallMs, runnerPid) {
   const tap = new TapSpans();
   const gcs = [];
   for (const [t, line] of pairs) {
     const parsed = parseGcLine(line);
-    if (parsed) gcs.push(parsed);
+    if (parsed) gcs.push({ ...parsed, arrWallMs: t });
     tap.addLine(t, line);
   }
   tap.flush();
@@ -177,13 +177,15 @@ test('TapSpans flush keeps a stream cut before diagnostics as a zero-width span'
   ]);
 });
 
-// Clock layout (wall ms): file heavy spawns at 1000, its single test
-// runs [1100, 1140]; its child GCs: a loading row (ts 100) and the
-// in-test row (ts 600). File light spawns at 5000, its test runs
-// [5800, 6000], its child GC fires at ts 1500. Votes: heavy
-// 1000+600−1140 = 460, light 5000+1500−6000 = 500 → global p90 offset
-// 500. The in-test rows land inside their windows ONLY under that
-// offset — offset 0 pushes both past their windows' ends.
+// Clock layout (heavy file): spawn 1000, child clock zero 1050 (its
+// first row's arrival 1100 − ts 50). The test (dur 40) ends just before
+// child exit: the TAP burst arrives at 1200 → tiled window [1160,
+// 1200]. Rows: loading ts 50 (row wall 1100 — before the window →
+// bucket), in-test ts 120 (wall 1170 — inside). The runner row (pid
+// 61088) is a runner-process row → bucket. Light file: spawn 5000, zero
+// 5040 (arrival 5940 − ts 900), burst 6050 → window [5850, 6050]; its
+// GC (row wall 5940) is inside. Every attribution is exact under the
+// per-child clock — no offset vote exists anymore.
 //
 // Labels: fixtures use relative file paths with a '.' root so
 // path.relative round-trips on every platform ('\'' vs '/').
@@ -195,11 +197,11 @@ function twoFileRuns() {
   const heavy = runFromLines(
     LABEL_HEAVY,
     [
-      [1140, 'TAP version 13'],
-      ...tapOk('allocates a lot', 1, 40, 1140),
-      [2000, `# [101:0xa]     100 ms: Scavenge 5.0 (6.0) -> 4.5 (6.0) MB, pooled: 0 MB, 0.5 / 0.0 ms  (average mu = 1.000, current mu = 1.000) task; `],
-      [2000, `# [101:0xa]     600 ms: Scavenge 9.0 (10.0) -> 5.0 (10.0) MB, pooled: 0 MB, 1.5 / 0.0 ms  (average mu = 1.000, current mu = 1.000) allocation failure; `],
-      [2000, SCAVENGE_RUNNER],
+      [1200, 'TAP version 13'],
+      ...tapOk('allocates a lot', 1, 40, 1200),
+      [1100, `# [101:0xa]      50 ms: Scavenge 5.0 (6.0) -> 4.5 (6.0) MB, pooled: 0 MB, 0.5 / 0.0 ms  (average mu = 1.000, current mu = 1.000) task; `],
+      [1170, `# [101:0xa]     120 ms: Scavenge 9.0 (10.0) -> 5.0 (10.0) MB, pooled: 0 MB, 1.5 / 0.0 ms  (average mu = 1.000, current mu = 1.000) allocation failure; `],
+      [1195, SCAVENGE_RUNNER],
     ],
     1000,
     61088,
@@ -207,9 +209,9 @@ function twoFileRuns() {
   const light = runFromLines(
     LABEL_LIGHT,
     [
-      [6000, 'TAP version 13'],
-      ...tapOk('quiet test', 1, 200, 6000),
-      [6000, `# [102:0xb]    1500 ms: Scavenge 3.0 (4.0) -> 1.0 (4.0) MB, pooled: 0 MB, 0.5 / 0.0 ms  (average mu = 1.000, current mu = 1.000) allocation failure; `],
+      [6050, 'TAP version 13'],
+      ...tapOk('quiet test', 1, 200, 6050),
+      [5940, `# [102:0xb]     900 ms: Scavenge 3.0 (4.0) -> 1.0 (4.0) MB, pooled: 0 MB, 0.5 / 0.0 ms  (average mu = 1.000, current mu = 1.000) allocation failure; `],
     ],
     5000,
     61089,
@@ -217,18 +219,19 @@ function twoFileRuns() {
   return [heavy, light];
 }
 
-test('attributes GCs to their own file, tests, and loading totals (KILL: boundary, offset, pid rules)', () => {
+test('attributes GCs to their own file and test; loading/runner rows are unattributed (KILL: window boundary, pid rules)', () => {
   const report = buildReport(twoFileRuns(), '.');
-  // Runner-process row (pid 61088) excluded; 2 + 1 child GCs counted.
-  assert.equal(report.gcCount, 3);
-  assert.equal(report.clockOffsetMs, 500);
+  // All 4 parsed rows counted (2 heavy child + 1 runner + 1 light child).
+  assert.equal(report.gcCount, 4);
+  assert.equal(report.unattributedCount, 2);
   assert.equal(report.testCount, 2);
   const byLabel = Object.fromEntries(report.suites.map((s) => [s.label, s]));
-  // heavy: loading 0.5 + in-test 4.0; light: 2.0.
-  assert.deepEqual(byLabel[LABEL_HEAVY], { label: LABEL_HEAVY, gcs: 2, churnMb: 4.5, growthMb: -4.5 });
+  // File totals carry ONLY window rows: heavy just the in-test 4.0
+  // (loading 0.5 went to the bucket), light 2.0.
+  assert.deepEqual(byLabel[LABEL_HEAVY], { label: LABEL_HEAVY, gcs: 1, churnMb: 4, growthMb: -4 });
   assert.deepEqual(byLabel[LABEL_LIGHT], { label: LABEL_LIGHT, gcs: 1, churnMb: 2, growthMb: -2 });
-  // In-test GC only under the voted offset (ts 600 → wall 1100, the
-  // window's first ms); the loading GC (wall 600) belongs to no test.
+  // Bucket: the heavy loading row (0.5) + the runner row (0.5).
+  assert.equal(report.unattributedChurnMb, 1);
   const heavyTest = report.tests.find((t) => t.label === 'allocates a lot');
   assert.deepEqual(heavyTest, {
     label: 'allocates a lot', suite: LABEL_HEAVY, type: 'test', result: 'pass',
@@ -239,20 +242,61 @@ test('attributes GCs to their own file, tests, and loading totals (KILL: boundar
     label: 'quiet test', suite: LABEL_LIGHT, type: 'test', result: 'pass',
     gcs: 1, churnMb: 2, growthMb: -2,
   });
-  assert.equal(report.totalChurnMb, 6.5);
-  assert.equal(report.totalHeapGrowthMb, -6.5);
+  // Totals span every row (window + bucket): 4 + 2 in-window, 0.5
+  // loading + 0.5 runner in the bucket.
+  assert.equal(report.totalChurnMb, 7);
+  assert.equal(report.totalHeapGrowthMb, -7);
 });
 
-test('a GC inside nested windows lands on the shorter span (KILL: window resolution)', () => {
-  // Wall layout: outer suite span [1100, 2000], inner test [1150, 1200].
-  // Child GCs: ts 170 → wall 1170 (inner; outer off by 70 ms of window),
-  // ts 1000 → wall 2000 (the vote anchor, the suite span's end).
+test('rows on or outside window edges never leak into file totals (KILL: bucket boundary)', () => {
+  // One file, two sequential tests (dur 100 each), TAP burst at 1400 →
+  // tiled windows [1200, 1300] and [1300, 1400]; the file's first row
+  // anchors the child clock at zero 1000 (arrival − ts). Rows: 1 ms
+  // before the first window start and 1 ms after the last window end —
+  // both bucket; rows exactly ON a window edge stay in the file
+  // (inclusive on both edges).
+  const run = runFromLines(
+    LABEL_HEAVY,
+    [
+      ...tapOk('first', 1, 100, 1400),
+      ...tapOk('second', 2, 100, 1400),
+      [1199, `# [101:0xa]     199 ms: Scavenge 2.0 (3.0) -> 1.0 (3.0) MB, pooled: 0 MB, 0.5 / 0.0 ms  (average mu = 1.000, current mu = 1.000) task; `],
+      [1200, `# [101:0xa]     200 ms: Scavenge 2.0 (3.0) -> 1.0 (3.0) MB, pooled: 0 MB, 0.5 / 0.0 ms  (average mu = 1.000, current mu = 1.000) task; `],
+      [1250, `# [101:0xa]     250 ms: Scavenge 2.0 (3.0) -> 1.0 (3.0) MB, pooled: 0 MB, 0.5 / 0.0 ms  (average mu = 1.000, current mu = 1.000) task; `],
+      [1350, `# [101:0xa]     350 ms: Scavenge 2.0 (3.0) -> 1.0 (3.0) MB, pooled: 0 MB, 0.5 / 0.0 ms  (average mu = 1.000, current mu = 1.000) task; `],
+      [1400, `# [101:0xa]     400 ms: Scavenge 2.0 (3.0) -> 1.0 (3.0) MB, pooled: 0 MB, 0.5 / 0.0 ms  (average mu = 1.000, current mu = 1.000) task; `],
+      [1401, `# [101:0xa]     401 ms: Scavenge 2.0 (3.0) -> 1.0 (3.0) MB, pooled: 0 MB, 0.5 / 0.0 ms  (average mu = 1.000, current mu = 1.000) task; `],
+    ],
+    1000,
+    61088,
+  );
+  const report = buildReport([run], '.');
+  const suite = report.suites[0];
+  // Only the four in-window rows are attributed.
+  assert.equal(suite.gcs, 4);
+  assert.equal(suite.churnMb, 4);
+  assert.equal(report.unattributedCount, 2);
+  assert.equal(report.unattributedChurnMb, 2);
+  assert.equal(report.totalChurnMb, 6);
+  const first = report.tests.find((t) => t.label === 'first');
+  const second = report.tests.find((t) => t.label === 'second');
+  assert.equal(first.gcs, 2);
+  assert.equal(second.gcs, 2);
+});
+
+test('a GC during describe-nested execution lands on the enclosing suite span (PIN: flat tiling)', () => {
+  // Wall layout: the inner test completes first (ok at 1200, dur 50),
+  // the enclosing suite at the burst (2000, dur 900). Windows tile back
+  // from the burst: suite [1100, 2000], inner [1050, 1100] — flat, so
+  // the GC executed inside the nested test (child clock 170 → wall
+  // 1170 under zero 1000) lands on the ENCLOSING suite span. It still
+  // counts toward the file total; only the per-test label is coarse.
   const nested = runFromLines(
     LABEL_NESTED,
     [
       ...tapOk('outer suite', 1, 900, 2000, { type: 'suite' }),
       ...tapOk('inner quick', 1, 50, 1200, { indent: '    ' }),
-      [2000, `# [103:0xc]     170 ms: Scavenge 4.0 (5.0) -> 0.7 (5.0) MB, pooled: 0 MB, 0.5 / 0.0 ms  (average mu = 1.000, current mu = 1.000) allocation failure; `],
+      [1170, `# [103:0xc]     170 ms: Scavenge 4.0 (5.0) -> 0.7 (5.0) MB, pooled: 0 MB, 0.5 / 0.0 ms  (average mu = 1.000, current mu = 1.000) allocation failure; `],
       [2000, `# [103:0xc]    1000 ms: Scavenge 2.0 (3.0) -> 1.0 (3.0) MB, pooled: 0 MB, 0.5 / 0.0 ms  (average mu = 1.000, current mu = 1.000) task; `],
     ],
     1000,
@@ -261,47 +305,51 @@ test('a GC inside nested windows lands on the shorter span (KILL: window resolut
   const report = buildReport([nested], '.');
   assert.equal(report.testCount, 1); // suite spans are not tests
   const inner = report.tests.find((t) => t.label === 'inner quick');
-  assert.deepEqual(inner, {
-    label: 'inner quick', suite: LABEL_NESTED, type: 'test', result: 'pass',
-    gcs: 1, churnMb: 3.3, growthMb: -3.3,
-  });
-  // The anchor GC lands on the enclosing suite span (still shorter than
-  // nothing) — never on the inner test, never on a file total.
+  assert.equal(inner.gcs, 0);
+  // Both rows land on the enclosing suite span (the anchor GC at the
+  // window's end edge, inclusive).
   const outer = report.tests.find((t) => t.label === 'outer suite');
-  assert.equal(outer.gcs, 1);
-  assert.equal(outer.churnMb, 1);
+  assert.equal(outer.gcs, 2);
+  assert.equal(outer.churnMb, 4.3);
+  const suite = report.suites[0];
+  assert.equal(suite.gcs, 2);
+  assert.equal(suite.churnMb, 4.3);
+  assert.equal(report.unattributedCount, 0);
 });
 
-test('globalOffset votes the 90th percentile across files (KILL: wrong vote index)', () => {
-  // 10 files casting votes 1..10: each GC's ts is 500 after its spawn,
-  // each window ends v ms after the GC → vote = v. p90 index
-  // floor(10*0.9)=9 → vote 10. A median/first/mean vote differs.
-  const runs = [];
-  for (let v = 1; v <= 10; v++) {
-    const spawnWallMs = v * 10000;
-    const endMs = spawnWallMs + 500 - v; // vote = spawn + ts − end = v
-    runs.push({
-      file: path.join('test', `f${v}.test.js`),
-      spawnWallMs,
-      runnerPid: 1,
-      gcs: [gc(2, 500, 2, 1)],
-      spans: [{ name: 'x', type: 'test', result: 'pass', startMs: endMs - 100, endMs }],
-    });
-  }
-  const report = buildReport(runs, '.');
-  assert.equal(report.clockOffsetMs, 10);
-  // Under the voted offset every GC sits on its window start (inclusive).
-  for (const t of report.tests) assert.equal(t.gcs, 1);
+test('rows of a run with no TAP spans are all unattributed (covers the zero fallback)', () => {
+  const run = runFromLines(
+    LABEL_HEAVY,
+    [
+      [1500, `# [101:0xa]     100 ms: Scavenge 2.0 (3.0) -> 1.0 (3.0) MB, pooled: 0 MB, 0.5 / 0.0 ms  (average mu = 1.000, current mu = 1.000) task; `],
+    ],
+    1000,
+    61088,
+  );
+  const report = buildReport([run], '.');
+  assert.equal(report.suites[0].gcs, 0);
+  assert.equal(report.gcCount, 1);
+  assert.equal(report.unattributedCount, 1);
+  assert.equal(report.unattributedChurnMb, 1);
+  assert.equal(report.testCount, 0);
 });
 
 test('parseMemoryArgs defaults, parses and validates (KILL: missing validation)', () => {
-  assert.deepEqual(parseMemoryArgs([]), { top: 20, format: 'console', paths: [] });
+  assert.deepEqual(parseMemoryArgs([]), {
+    top: 20, format: 'console', badge: null, badgeThreshold: 500, paths: [],
+  });
   assert.deepEqual(parseMemoryArgs(['--top', '5', '--format', 'json', 'test/a.test.js']),
-    { top: 5, format: 'json', paths: ['test/a.test.js'] });
-  assert.deepEqual(parseMemoryArgs(['--top=7']), { top: 7, format: 'console', paths: [] });
+    { top: 5, format: 'json', badge: null, badgeThreshold: 500, paths: ['test/a.test.js'] });
+  assert.deepEqual(parseMemoryArgs(['--top=7']), { top: 7, format: 'console', badge: null, badgeThreshold: 500, paths: [] });
+  assert.deepEqual(
+    parseMemoryArgs(['--badge', 'badges/memory.svg', '--badge-threshold', '1000']),
+    { top: 20, format: 'console', badge: 'badges/memory.svg', badgeThreshold: 1000, paths: [] },
+  );
   assert.throws(() => parseMemoryArgs(['--format', 'yaml']), /Invalid --format/);
   assert.throws(() => parseMemoryArgs(['--top', '0']), /Invalid --top/);
   assert.throws(() => parseMemoryArgs(['--top', 'abc']), /Invalid --top/);
+  assert.throws(() => parseMemoryArgs(['--badge-threshold', '-1']), /Invalid --badge-threshold/);
+  assert.throws(() => parseMemoryArgs(['--badge-threshold', 'lots']), /Invalid --badge-threshold/);
   assert.throws(() => parseMemoryArgs(['--bogus']), /unknown flag/);
 });
 
@@ -381,10 +429,37 @@ test('memory --format json keeps stdout JSON-only', () => {
     assert.equal(report.suites.length, 2);
     assert.equal(report.tests.length, 2);
     assert.ok(Number.isFinite(report.totalChurnMb));
-    assert.ok(Number.isFinite(report.clockOffsetMs));
+    assert.ok(Number.isInteger(report.unattributedCount));
+    assert.ok(Number.isFinite(report.unattributedChurnMb));
+    assert.ok(!('clockOffsetMs' in report)); // per-child clocks: no global offset
+    // Files + bucket add up to the all-rows total.
+    const suiteChurn = report.suites.reduce((n, s) => n + s.churnMb, 0);
+    assert.ok(Math.abs(suiteChurn + report.unattributedChurnMb - report.totalChurnMb) < 0.05);
     for (const suite of report.suites) {
       assert.deepEqual(Object.keys(suite).sort(), ['churnMb', 'gcs', 'growthMb', 'label']);
     }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}, { timeout: 60_000 });
+
+test('memory --badge writes the churn SVG (threshold drives the color)', () => {
+  const root = buildFixtureProject();
+  try {
+    const badge = path.join(root, 'badges', 'memory.svg');
+    const r = runCli(root, ['memory', '--badge', badge]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, /badge written to/);
+    const svg = readFileSync(badge, 'utf8');
+    assert.match(svg, /aria-label="memory churn: \d+ MB"/);
+    assert.match(svg, /<text x="[.\d]+" y="14">memory churn<\/text>/);
+    // The fixture suite's churn is way under the default 500 MB → green.
+    assert.match(svg, /fill="#4c1"/);
+    // A tiny threshold flips the same suite to red (> 2 × threshold).
+    const red = path.join(root, 'memory-red.svg');
+    const r2 = runCli(root, ['memory', '--badge', red, '--badge-threshold', '0.01']);
+    assert.equal(r2.status, 0, r2.stderr);
+    assert.match(readFileSync(red, 'utf8'), /fill="#e05d44"/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

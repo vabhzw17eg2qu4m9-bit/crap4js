@@ -344,9 +344,11 @@ config system; all knobs are CLI flags).
 
 ## Memory
 
-`crap4js memory [--top N] [--format console|json] [paths...]` — per-test
-GC/alloc attribution, port of crap4dart 3bae178 (upstream spec 4.7, phase
-1). Runs the suite under the runtime's GC tracing and attributes GC events
+`crap4js memory [--top N] [--format console|json] [--badge PATH]
+[--badge-threshold MB] [paths...]` — per-test GC/alloc attribution, port
+of crap4dart 3bae178 (upstream spec 4.7, phase 1), hardened per upstream
+11551739c8 (phase 2: per-child clocks + unattributed bucket + badge).
+Runs the suite under the runtime's GC tracing and attributes GC events
 and reclaimed memory to files and tests. Informational only: always exits
 0 (1 on usage errors); thresholds and the `memory_pressure` gate come
 separately — raw GC counts are machine-dependent, allocated MB are not.
@@ -355,39 +357,62 @@ separately — raw GC counts are machine-dependent, allocated MB are not.
   file per sequential child run. node:test already gives every file its
   own process, so the process boundary is the exact file attribution —
   the analog of upstream's isolate-name/dill-index machinery; straggler
-  rows cannot cross runs. Rows of the runner process itself are excluded
-  by pid (the analog of upstream's `test_suite` isolate filter); when
-  that filter empties a non-empty row set, the rows are kept rather than
-  reported as zero churn (in-process isolation insurance). Row parsing
-  accepts both renderings of V8's `[%d:%p]` isolate header — glibc and
-  Darwin print `0x…` lowercase hex, the Windows CRT bare uppercase hex.
-  TAP
-  spans (ok/not-ok + `duration_ms` diagnostics, timestamped at line
-  arrival) provide the test windows; `type: 'suite'` spans (describe
-  blocks) are windows too but are not counted as tests.
+  rows cannot cross runs (each child's pipes are read separately and
+  rows carry the child pid), so upstream's seq-continuation guard has no
+  analog here. Rows of the runner process itself go to the unattributed
+  bucket; when the pid discriminator would empty a non-empty row set
+  (in-process isolation topology), the rows are kept as test-child rows
+  instead of fabricating zero churn. Row parsing accepts both renderings
+  of V8's `[%d:%p]` isolate header — glibc and Darwin print `0x…`
+  lowercase hex, the Windows CRT bare uppercase hex. TAP spans (ok/
+  not-ok + `duration_ms` diagnostics) provide the test windows;
+  `type: 'suite'` spans (describe blocks) are windows too but are not
+  counted as tests.
+- Clocks and trust (the phase-2 semantics, adapted to this runtime):
+  trace-gc timestamps count ms since the CHILD process started — every
+  file owns its clock, and its zero in wall time is MEASURED from the
+  file's own first GC row (stderr streams unbuffered: zero = arrival −
+  ts) — the analog of upstream's suite event time marking the
+  isolate-clock zero. TAP ok-lines arrive in one buffered burst at child
+  exit, so test windows are tiled back from the burst with the real
+  `duration_ms` values (tests run sequentially); describe-nested spans
+  tile flat, so per-test grain under describe is approximate — the row
+  still counts toward its file. Only rows INSIDE a test window are
+  trusted: loading rows (module compilation, before the first window),
+  teardown rows (after the last), and runner-process rows land in a
+  separate UNATTRIBUTED bucket that never pollutes file totals; the
+  tiled windows are disjoint, so a shared tile edge attributes to the
+  earlier test (the outcome of upstream's narrower-window rule under
+  tiling). There is no
+  global clock offset to calibrate — phase 1's per-file p90 offset vote
+  was the artifact source upstream removed; the per-child zero replaces
+  it. `--badge <path>` (+ `--badge-threshold MB`, default 500) writes a
+  shields-style `memory churn | <N> MB` SVG of the suite total: green at
+  or below the threshold, yellow at most twice it, red beyond.
 - Semantics: a `--trace-gc` row exposes the WHOLE heap used before →
   after one collection — V8 exposes no generation split, so upstream's
   new-gen churn / old-gen growth pair collapses to `churnMb`
   (Σ max(0, before − after): reclaimed heap volume, the allocation proxy)
   and `heapGrowthMb` (Σ after − before: signed retained growth, the leak
   suspect). The `pooled:` external-memory column and pause times are
-  parsed past, not summed.
-- Clocks: trace-gc timestamps are ms since the child started; TAP times
-  are wall-clock arrivals. One GLOBAL offset (gc clock − reporter clock)
-  is voted per file by (last child GC − end of its last test) at the
-  90th percentile — upstream's exact mechanism, here absorbing the
-  spawn→V8-init latency. A GC before a file's first test start is a
-  loading GC: file totals only. Nested windows resolve to the shorter
-  span (upstream rule, exercised by describe blocks).
-- Output: console leaderboards (top N by churn, top N by heap growth)
-  or `--format json` (stdout stays JSON-only, progress on stderr) with
-  `testCount`, `gcCount`, `totalChurnMb`, `totalHeapGrowthMb`,
-  `clockOffsetMs`, per-suite and per-test entries.
+  parsed past, not summed. Totals span every parsed row; suite/test
+  totals carry only window-attributed rows — the difference is exactly
+  the bucket.
+- Output: console leaderboards (top N by churn, top N by heap growth,
+  plus the unattributed line) or `--format json` (stdout stays
+  JSON-only, progress on stderr) with `testCount`, `gcCount`,
+  `totalChurnMb`, `totalHeapGrowthMb`, `unattributedCount`,
+  `unattributedChurnMb`, per-suite and per-test entries.
 - Churn totals are deterministic at file level (function of the code):
-  dogfooding this repo, 374 tests / ~118 GCs / ~161 MB churn across runs
-  (0.3% spread), top file `testAssertions.test.js` 44.7 MB in both runs;
-  per-test grain is noisier (a GC straddling a window boundary flips).
-  Churn is the future gate metric, never counts.
+  dogfooding this repo, 382 tests / ~187 GCs / ~197 MB total churn, of
+  which ~111 loading/teardown/runner GCs (~55 MB) are unattributed;
+  window-attributed file numbers repeat across runs to ~±1% for files
+  with real churn (top: `testAssertions.test.js` ~40 MB in both runs);
+  sub-MB files can flip a single boundary row between a window and the
+  bucket. `badges/memory.svg` tracks the self suite and is refreshed by
+  running the command manually — the commit-badges workflow refreshes
+  only the CRAP/coverage badges, never memory.svg. Churn is the future
+  gate metric, never counts.
 
 ## File naming
 
