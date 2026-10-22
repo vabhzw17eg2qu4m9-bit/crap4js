@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.17.0...v0.18.0) (2026-10-22)
+
+
+### Features
+
+* **memory:** unattributed bucket + --badge ([#55](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/55)) ([8b4ae8c](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/8b4ae8cfb398f1da74959f058bf03070c1550001))
+
 ## [0.17.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.16.0...v0.17.0) (2026-10-22)
 
 
