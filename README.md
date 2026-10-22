@@ -98,6 +98,10 @@ crap4js mutation [--min-score N] [--max-survivors N]
                  its file's derived test files (scoped kills cache as
                  kills; survivors are re-confirmed against the full
                  suite).
+crap4js memory [--top N] [--format console|json] [paths...]
+                          Run the test suite under node --trace-gc and
+                          report per-test allocation churn and heap
+                          growth (informational — always exits 0).
 crap4js skill            Print the crap4js profiling skill for AI agents.
 ```
 
@@ -207,6 +211,40 @@ function's total exceeds `--threshold` ms. `--name` is forwarded to
 and record no timings. The full `src/` set is always instrumented and
 attributed. MEAN values marked `~` are sub-30µs — instrumentation overhead
 dominates there; read the CALLS/TOTAL deltas instead.
+
+## `memory`
+
+`crap4js memory [--top N] [--format console|json] [paths...]` runs the test
+suite under `node --trace-gc` and reports per-test allocation churn and heap
+growth (ported from crap4dart 3bae178, phase 1). Each test file runs in its
+own sequential child process (`node --trace-gc --test --test-reporter=tap
+<file>` one file at a time — the concurrency=1 of this port), so the process
+boundary is the file attribution; GC rows are attributed to individual tests
+through TAP spans plus one global clock offset voted across files at the
+90th percentile (last GC of the file minus end of its last test). Loading
+GCs (before a file's first test start) count toward file totals only; nested
+windows resolve to the shorter span.
+
+```
+memory: 374 tests, 118 GCs, churn 160.6 MB reclaimed, heap -160.6 MB, clock offset -45.0 ms
+
+top 8 by allocation churn (reclaimed heap MB):
+  GCs  churn MB  growth MB  test
+    9       22.9       -22.9  magic-constants over the repo itself finds no violations
+    8       17.3       -17.3  unused-code over the repo itself finds no violations
+```
+
+Honest semantics: `node --trace-gc` exposes one whole-heap counter pair per
+collection (used before → after), no generation split, so upstream's
+new-gen churn / old-gen growth pair collapses to **churn** (Σ reclaimed
+heap MB, clamped at 0 per collection) and **heap growth** (Σ signed MB —
+positive, never-freed growth is the leak suspect). Churn totals are a
+function of the code (stable across runs at file level to ~±1%; GC counts
+are machine-dependent) — churn is the future gate metric, never counts.
+
+`--format json` prints the report as JSON on stdout (progress goes to
+stderr). The command is informational and always exits 0 (1 on usage
+errors); thresholds and a gate come separately.
 
 ## `file-naming`
 

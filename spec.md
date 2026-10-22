@@ -342,6 +342,53 @@ Skipped from upstream: `--tags`/`--exclude-tags` (`node --test` has no tag
 concept — use `--name` patterns) and the config-file options (crap4js has no
 config system; all knobs are CLI flags).
 
+## Memory
+
+`crap4js memory [--top N] [--format console|json] [paths...]` — per-test
+GC/alloc attribution, port of crap4dart 3bae178 (upstream spec 4.7, phase
+1). Runs the suite under the runtime's GC tracing and attributes GC events
+and reclaimed memory to files and tests. Informational only: always exits
+0 (1 on usage errors); thresholds and the `memory_pressure` gate come
+separately — raw GC counts are machine-dependent, allocated MB are not.
+
+- Runner: `node --trace-gc --test --test-reporter=tap <file>`, one test
+  file per sequential child run. node:test already gives every file its
+  own process, so the process boundary is the exact file attribution —
+  the analog of upstream's isolate-name/dill-index machinery; straggler
+  rows cannot cross runs. Rows of the runner process itself are excluded
+  by pid (the analog of upstream's `test_suite` isolate filter); when
+  that filter empties a non-empty row set, the rows are kept rather than
+  reported as zero churn (in-process isolation insurance). Row parsing
+  accepts both renderings of V8's `[%d:%p]` isolate header — glibc and
+  Darwin print `0x…` lowercase hex, the Windows CRT bare uppercase hex.
+  TAP
+  spans (ok/not-ok + `duration_ms` diagnostics, timestamped at line
+  arrival) provide the test windows; `type: 'suite'` spans (describe
+  blocks) are windows too but are not counted as tests.
+- Semantics: a `--trace-gc` row exposes the WHOLE heap used before →
+  after one collection — V8 exposes no generation split, so upstream's
+  new-gen churn / old-gen growth pair collapses to `churnMb`
+  (Σ max(0, before − after): reclaimed heap volume, the allocation proxy)
+  and `heapGrowthMb` (Σ after − before: signed retained growth, the leak
+  suspect). The `pooled:` external-memory column and pause times are
+  parsed past, not summed.
+- Clocks: trace-gc timestamps are ms since the child started; TAP times
+  are wall-clock arrivals. One GLOBAL offset (gc clock − reporter clock)
+  is voted per file by (last child GC − end of its last test) at the
+  90th percentile — upstream's exact mechanism, here absorbing the
+  spawn→V8-init latency. A GC before a file's first test start is a
+  loading GC: file totals only. Nested windows resolve to the shorter
+  span (upstream rule, exercised by describe blocks).
+- Output: console leaderboards (top N by churn, top N by heap growth)
+  or `--format json` (stdout stays JSON-only, progress on stderr) with
+  `testCount`, `gcCount`, `totalChurnMb`, `totalHeapGrowthMb`,
+  `clockOffsetMs`, per-suite and per-test entries.
+- Churn totals are deterministic at file level (function of the code):
+  dogfooding this repo, 374 tests / ~118 GCs / ~161 MB churn across runs
+  (0.3% spread), top file `testAssertions.test.js` 44.7 MB in both runs;
+  per-test grain is noisier (a GC straddling a window boundary flips).
+  Churn is the future gate metric, never counts.
+
 ## File naming
 
 `crap4js file-naming [paths...]` (default: the normal source-selection rules)
