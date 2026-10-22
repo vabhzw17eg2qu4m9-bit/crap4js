@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.16.0...v0.17.0) (2026-10-22)
+
+
+### Features
+
+* **memory:** per-test GC/alloc attribution ([#53](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/53)) ([ead76e1](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/ead76e16bec8467c5b445373e0584a395b696c1f))
+
 ## [0.16.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.15.0...v0.16.0) (2026-10-20)
 
 
