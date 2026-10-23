@@ -64,6 +64,10 @@ crap4js duplicates [--threshold N] [--min-tokens N] [--min-lines N]
                    clones mode reports one violation per clone group.
 crap4js test-assertions [paths...]
                          Flag test()/it() bodies with zero assertion calls.
+crap4js inline-anon-types [--max-fields N] [paths...]
+                         Flag inline anonymous type literals ({...} / [...])
+                         in function signature annotations; plain .js is a
+                         no-op there.
 crap4js folder-structure
                          Flag src/ directories with loose direct files.
 crap4js mutation [--min-score N] [--max-survivors N]
@@ -78,7 +82,7 @@ crap4js skill            Print the crap4js profiling skill for AI agents.
 The first argument selects a subcommand when it is exactly `profile`,
 `file-naming`, `nesting`, `class-size`, `weight-of-class`, `unused-code`,
 `unused-files`, `banned-imports`, `magic-constants`, `duplicates`, `test-assertions`,
-`folder-structure`, `mutation`, or `skill`; anything else (flags, paths)
+`inline-anon-types`, `folder-structure`, `mutation`, or `skill`; anything else (flags, paths)
 is analyzed as the CRAP command above. `--changed` is mutually exclusive
 with explicit paths. Unknown flags are a usage error (exit 1).
 
@@ -245,7 +249,7 @@ threshold; otherwise `passed`.
 |------|-----------------------------------------------------------------------------|
 | `0`  | Success (including empty selection, or max numeric CRAP ≤ threshold).       |
 | `1`  | CLI usage error (bad flag, bad threshold, `--changed` + paths, unreadable, banned-imports rule misuse). |
-| `2`  | CRAP threshold exceeded (`CRAP threshold exceeded: <max> > <threshold>` on stderr), profile threshold exceeded, or gate-subcommand violations (file-naming, nesting, class-size, weight-of-class, unused-code, unused-files, banned-imports, magic-constants, duplicates, test-assertions, folder-structure). |
+| `2`  | CRAP threshold exceeded (`CRAP threshold exceeded: <max> > <threshold>` on stderr), profile threshold exceeded, or gate-subcommand violations (file-naming, nesting, class-size, weight-of-class, unused-code, unused-files, banned-imports, magic-constants, duplicates, test-assertions, inline-anon-types, folder-structure). |
 
 ## `--run-tests`
 
@@ -458,7 +462,9 @@ and `banned-imports` are ports of the crap4dart 0.5.x gates of the same
 names; `magic-constants` is a port of the crap4dart 0.6.x–0.9.x
 magic_constants gate; `test-assertions`, `folder-structure`, and
 `duplicates` are ports of the crap4dart 0.9.x test_assertions,
-folder_structure, and duplication gates; `mutation` is a port of the
+folder_structure, and duplication gates; `inline-anon-types` is a port
+of the crap4dart 4d844a4 record gates (`inline_record_types` +
+`record_size`, merged and adapted); `mutation` is a port of the
 crap4dart mutation gate (commit c865ec3).
 crap4js has no gate framework and no config file, so each gate is
 a CLI subcommand with its built-in default thresholds; every gate accepts
@@ -723,6 +729,38 @@ plus colocated `*.test.js`/`*.spec.js` under `src/`; explicit paths are
 kept verbatim. Summary: `M tests assert their expectations` /
 `N/M tests without assertions`. Takes only paths — any `--flag`
 argument is a usage error (exit 1).
+
+### inline-anon-types
+
+Port of the crap4dart 4d844a4 record gates (`inline_record_types` +
+`record_size`, merged and adapted) to JS/TS/Flow: flags inline anonymous
+type literals — `TSTypeLiteral`/`TSTupleType` (TypeScript) and
+`ObjectTypeAnnotation`/`TupleTypeAnnotation` (Flow) — reachable from a
+signature's parameter or return annotations, including nested inside
+type arguments (`Promise<{r: string}>`). Signatures: function
+declarations, function expressions, arrows, class/object methods,
+`declare function` overloads, type aliases whose aliased type is a
+function type (a function-type alias blesses nothing — upstream rule;
+Flow spellings `TypeAlias`/`FunctionTypeAnnotation` included), and
+parameter annotations wherever Babel stores them — plain params,
+default-valued params (`AssignmentPattern.left`), and constructor
+parameter properties (`TSParameterProperty.parameter`).
+Violation: `inline anonymous type in signature (N member(s)) — declare
+it as a named interface/type alias`, plus ` — N members > max M` when
+the shape's own arity (tuple length / object member count) exceeds
+`--max-fields` (default 5; `--flag=VALUE` accepted; any other argument
+is a path). Only the outermost shape of a nested group is reported
+(upstream's _TypeWalker rule) — an inner shape is part of the same fix.
+Named interfaces and type aliases are the blessed form and never
+flagged. Adaptation note: Dart records don't exist here — every
+tuple/object annotation is unnamed by nature, so upstream's
+unnamed-fields kind collapses into the inline kind, and positional
+field access (`.$N`) has no honest analog (`t[0]` is universal array
+indexing), so that kind is skipped. Plain `.js`/`.jsx` without type
+syntax is a documented no-op (no JSDoc parsing); the surface exists on
+`.ts`/`.tsx` (part of the default selection) and flow-annotated `.js`.
+Summary: `M signatures checked, no inline anonymous types` / `N inline
+anonymous types in signatures`. Exit 2 iff violations exist.
 
 ### folder-structure
 

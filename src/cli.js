@@ -39,14 +39,19 @@
 //                            informational — always exits 0.
 //   crap4js test-assertions [paths...]
 //                            Flag test() bodies with zero assertion calls.
+//   crap4js inline-anon-types [--max-fields N] [paths...]
+//                            Flag inline anonymous type literals
+//                            ({...} / [...]) in function signature
+//                            annotations, incl. nested in type arguments;
+//                            no-op on plain .js (no type syntax there).
 //   crap4js folder-structure Flag src/ dirs with loose (direct) files.
 //   crap4js skill            Print the crap4js profiling skill for AI agents.
 //
 // The first argument selects a subcommand when it is exactly `profile`,
 // `file-naming`, `nesting`, `class-size`, `weight-of-class`, `unused-code`,
 // `unused-files`, `banned-imports`, `magic-constants`, `duplicates`,
-// `similarity`, `test-assertions`, `folder-structure`, `mutation`,
-// `memory`, or `skill`;
+// `similarity`, `test-assertions`, `inline-anon-types`, `folder-structure`,
+// `mutation`, `memory`, or `skill`;
 // anything else is analyzed as before.
 //
 // Exit codes: 0 success; 1 usage error; 2 CRAP/profile threshold exceeded
@@ -68,6 +73,7 @@ import { runMagicConstants } from './magicConstants.js';
 import { runDuplicates } from './duplicates.js';
 import { runSimilarity } from './similarity.js';
 import { runTestAssertions } from './testAssertions.js';
+import { runInlineAnonTypes } from './inlineAnonTypes.js';
 import { runFolderStructure } from './folderStructure.js';
 import { runMutation } from './mutation.js';
 import { parseProfileArgs, runProfile } from './profile.js';
@@ -121,6 +127,11 @@ function usage() {
     '                           violation per clone group',
     '  crap4js test-assertions [paths...]',
     '                           Flag test()/it() bodies with zero assertion calls',
+    '  crap4js inline-anon-types [--max-fields N] [paths...]',
+    '                           Flag inline anonymous type literals ({...}',
+    '                           / [...]) in function signature annotations,',
+    '                           incl. nested in type arguments; plain .js',
+    '                           has no type syntax, so it is a no-op there',
     '  crap4js folder-structure',
     '                           Flag src/ directories with loose direct files',
     '  crap4js mutation [--min-score N] [--max-survivors N]',
@@ -167,6 +178,7 @@ const SUBCOMMANDS = {
   duplicates: (args, ctx) => runDuplicates(args, ctx),
   similarity: (args, ctx) => runSimilarity(args, ctx),
   'test-assertions': (args, ctx) => runTestAssertions(args, ctx),
+  'inline-anon-types': (args, ctx) => runInlineAnonTypes(args, ctx),
   'folder-structure': (args, ctx) => runFolderStructure(args, ctx),
   mutation: (args, ctx) => runMutation(args, ctx),
   memory: (args, ctx) => runMemory(args, ctx),

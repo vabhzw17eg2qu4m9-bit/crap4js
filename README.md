@@ -83,6 +83,11 @@ crap4js similarity [--format console|json] [--jaccard N]
                    clusters; informational — always exits 0.
 crap4js test-assertions [paths...]
                          Flag test()/it() bodies with zero assertion calls.
+crap4js inline-anon-types [--max-fields N] [paths...]
+                         Flag inline anonymous type literals ({...} / [...])
+                         in function signature annotations, incl. nested
+                         in type arguments; plain .js has no type syntax,
+                         so it is a no-op there.
 crap4js folder-structure Flag src/ directories with loose direct files.
 crap4js mutation [--min-score N] [--max-survivors N]
                  [--timeout-seconds N] [--max-mutants N]
@@ -113,7 +118,7 @@ usage error.
 The gate-check subcommands (`file-naming`, `nesting`, `class-size`,
 `weight-of-class`, `unused-code`, `unused-files`, `banned-imports`,
 `magic-constants`, `duplicates`, `similarity`, `test-assertions`,
-`folder-structure`, `mutation`) are ports of
+`inline-anon-types`, `folder-structure`, `mutation`) are ports of
 crap4dart gates. crap4js has no gate framework or config
 file, so each gate is a subcommand with its default thresholds and the
 shared exit-code contract: `0` pass/skip, `1` usage error, `2` violations
@@ -470,6 +475,34 @@ Default file set: `test/` recursively plus colocated `*.test.js`/
 `*.spec.js` under `src/`; explicit paths are kept verbatim. min_assertions
 (default 1) is baked in. Exit 2 iff violations exist.
 
+## `inline-anon-types`
+
+`crap4js inline-anon-types [--max-fields N] [paths...]` (port of
+crap4dart 4d844a4's `inline_record_types` + `record_size` gates, merged
+and adapted) flags inline anonymous type literals in function signature
+annotations: object type literals (`{a: string}`) and tuple types
+(`[string, number]`) in a parameter or return annotation, including
+nested inside type arguments (`Promise<{r: string}>`). Consumers of such
+a signature must diff the shape field-by-field, and "similar but not
+exact" inline shapes silently drift apart — the shape belongs behind one
+named interface or type alias.
+
+Adaptation, since Dart records don't exist in JS/TS/Flow: every
+tuple/object annotation is unnamed by nature, so upstream's
+unnamed-fields and inline kinds collapse into one; positional field
+access (`.$N`) has no honest analog (`t[0]` is universal array indexing)
+and is skipped. `--max-fields` (default 5) caps the flagged shape's own
+arity — tuple length / object member count — and adds a
+`— N members > max 5` note when exceeded. Named interfaces and type
+aliases are the blessed form and never flagged; a function-type alias
+blesses nothing (upstream rule). Only the outermost shape of a nested
+group is reported — an inner shape is part of the same fix.
+
+Plain `.js`/`.jsx` without type syntax has nothing to flag — there is no
+JSDoc parsing — so the gate is a documented no-op there; the surface
+exists on `.ts`/`.tsx` (already part of the default selection) and on
+flow-annotated `.js` files. Exit 2 iff violations exist.
+
 ## `folder-structure`
 
 `crap4js folder-structure` (port of crap4dart's folder_structure gate,
@@ -716,6 +749,7 @@ crap4js/
     bannedImports.js  banned-imports command
     magicConstants.js  magic-constants command
     testAssertions.js  test-assertions command
+    inlineAnonTypes.js  inline-anon-types command
     folderStructure.js  folder-structure command
     mutation.js   mutation command (operator table, engine, coverage gating)
     mutationCache.js  digest-incremental mutation cache (killed-stays-killed)
