@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.19.0...v0.20.0) (2026-10-23)
+
+
+### Features
+
+* **gate:** inline-anon-types gate (adapted from upstream 4d844a4 record gates) ([#59](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/59)) ([2e82ff5](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/2e82ff5980c863b83883e52560f983ca18e4eac7))
+
 ## [0.19.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.18.0...v0.19.0) (2026-10-23)
 
 
