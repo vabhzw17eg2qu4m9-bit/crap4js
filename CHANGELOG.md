@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.18.0...v0.19.0) (2026-10-23)
+
+
+### Features
+
+* **memory:** allocated-volume reporting (totalAllocatedMb, alloc MB column) ([#57](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/57)) ([98a5aa1](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/98a5aa1ad2fee89d428d31aecd795b8070165a8e))
+
 ## [0.18.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.17.0...v0.18.0) (2026-10-22)
 
 
