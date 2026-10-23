@@ -238,6 +238,10 @@ export function buildReport(runs, root) {
     testCount: tests.filter((t) => t.type === TEST_TYPE).length,
     gcCount: allRows.length,
     totalChurnMb: round1(allRows.reduce((n, gc) => n + reclaimedMb(gc), 0)),
+    // The allocated-volume headline of upstream b7c227d: on the Dart
+    // engine allocatedMb IS the churn proxy; node has no exact gross
+    // allocation counter either, so totalAllocatedMb == totalChurnMb.
+    totalAllocatedMb: round1(allRows.reduce((n, gc) => n + reclaimedMb(gc), 0)),
     totalHeapGrowthMb: round1(allRows.reduce((n, gc) => n + heapDeltaMb(gc), 0)),
     unattributedCount: unattributed.length,
     unattributedChurnMb: round1(
@@ -555,7 +559,11 @@ function printConsole(report, top, out) {
   out.write(
     `memory: ${report.testCount} tests, ${report.gcCount} GCs, ` +
       `churn ${report.totalChurnMb.toFixed(1)} MB reclaimed, ` +
-      `heap ${growth >= 0 ? '+' : ''}${growth.toFixed(1)} MB\n`,
+      `heap ${growth >= 0 ? '+' : ''}${growth.toFixed(1)} MB` +
+      (report.totalAllocatedMb > 0
+        ? `, allocated ${report.totalAllocatedMb.toFixed(1)} MB`
+        : '') +
+      '\n',
   );
   if (report.unattributedCount > 0) {
     out.write(
@@ -564,7 +572,9 @@ function printConsole(report, top, out) {
         `${report.unattributedChurnMb.toFixed(1)} MB\n`,
     );
   }
-  out.write('\ntop ' + top + ' by allocation churn (reclaimed heap MB):\n');
+  out.write(
+    '\ntop ' + top + ' by allocation volume (churn MB proxy on node):\n',
+  );
   printTable(byDesc(report.tests, 'churnMb').slice(0, top), out);
   out.write('\ntop ' + top + ' by heap growth (leak suspects first):\n');
   printTable(byDesc(report.tests, 'growthMb').slice(0, top), out);
@@ -579,7 +589,7 @@ function printTable(entries, out) {
     out.write('  (no GC activity)\n');
     return;
   }
-  out.write('  GCs  churn MB  growth MB  test\n');
+  out.write('  GCs  alloc MB  growth MB  test\n');
   for (const e of entries) {
     out.write(
       String(e.gcs).padStart(5) +

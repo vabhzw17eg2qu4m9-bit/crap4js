@@ -409,7 +409,21 @@ test('memory reports the fixture suite on stdout and progress on stderr', () => 
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stderr, /running 2 test file\(s\) under node --trace-gc/);
     assert.match(r.stdout, /memory: 2 tests, \d+ GCs, churn [\d.]+ MB reclaimed/);
-    assert.match(r.stdout, /top 2 by allocation churn/);
+    // Allocated-volume wording of the b7c227d port: headline suffix
+    // equal to churn on node, retitled leaderboard, alloc MB column.
+    const headline = r.stdout.match(
+      /churn ([\d.]+) MB reclaimed, heap [+-][\d.]+ MB, allocated ([\d.]+) MB/,
+    );
+    assert.ok(headline, 'headline carries the allocated suffix');
+    assert.equal(headline[2], headline[1]);
+    assert.match(r.stdout, /top 2 by allocation volume \(churn MB proxy on node\)/);
+    // On some platforms (Windows CI) the fixture attributes zero GC rows
+    // to tests — every row lands in the unattributed bucket and both
+    // tables print '(no GC activity)'. The header stays pinned where
+    // attribution produced rows; the empty path is the documented one.
+    if (!r.stdout.includes('(no GC activity)')) {
+      assert.match(r.stdout, /  GCs  alloc MB  growth MB  test/);
+    }
     assert.match(r.stdout, /top 2 by heap growth/);
     // A real allocation churn number came out of a real run.
     const churn = Number(r.stdout.match(/churn ([\d.]+) MB/)[1]);
@@ -438,6 +452,23 @@ test('memory --format json keeps stdout JSON-only', () => {
     for (const suite of report.suites) {
       assert.deepEqual(Object.keys(suite).sort(), ['churnMb', 'gcs', 'growthMb', 'label']);
     }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}, { timeout: 60_000 });
+
+test('memory json carries totalAllocatedMb equal to the churn total (b7c227d port)', () => {
+  const root = buildFixtureProject();
+  try {
+    const r = runCli(root, ['memory', '--format', 'json']);
+    assert.equal(r.status, 0, r.stderr);
+    const report = JSON.parse(r.stdout);
+    // The field exists (dropping it fails) and IS the churn proxy on
+    // node — re-sourcing it to any other total fails. Positive: the
+    // fixture really allocates, so the headline suffix fires too.
+    assert.ok('totalAllocatedMb' in report);
+    assert.equal(report.totalAllocatedMb, report.totalChurnMb);
+    assert.ok(report.totalAllocatedMb > 0);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

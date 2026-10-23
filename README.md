@@ -236,11 +236,11 @@ global calibration. The tiled windows are disjoint; a shared tile edge
 attributes to the earlier test.
 
 ```
-memory: 382 tests, 186 GCs, churn 194.9 MB reclaimed, heap -194.9 MB
+memory: 382 tests, 186 GCs, churn 194.9 MB reclaimed, heap -194.9 MB, allocated 194.9 MB
 unattributed (loading/teardown/runner rows): 111 GCs, 53.4 MB
 
-top 3 by allocation churn (reclaimed heap MB):
-  GCs  churn MB  growth MB  test
+top 3 by allocation volume (churn MB proxy on node):
+  GCs  alloc MB  growth MB  test
    12       39.9       -39.9  test-assertions over the repo itself finds no violations
 ```
 
@@ -263,10 +263,22 @@ future gate metric, never counts. Most of this suite's churn happens
 during module loading and is honestly unattributed (upstream's shape
 too: only in-window rows count toward files).
 
+Allocation volume (ported from crap4dart b7c227d): the report carries
+`totalAllocatedMb` and the churn leaderboard is titled "by allocation
+volume" with an `alloc MB` column. On node `totalAllocatedMb` IS the
+churn total — V8 exposes no exact gross allocation counter to an
+out-of-process reporter, so the reclaimed-heap proxy is the documented
+honest value (upstream's Dart engine reports the same proxy; only its
+Flutter engine reads exact bytes from the VM). The upstream `--engine
+dart|flutter` flag is N/A here: node is spawned directly by this
+command, so no flag-swallowing middleware sits between the tool and
+the measured runtime.
+
 `--format json` prints the report as JSON on stdout (progress goes to
-stderr) with `unattributedCount` / `unattributedChurnMb` alongside the
-totals. The command is informational and always exits 0 (1 on usage
-errors); thresholds and a gate come separately.
+stderr) with `totalAllocatedMb` (equal to `totalChurnMb` on node) and
+`unattributedCount` / `unattributedChurnMb` alongside the totals. The
+command is informational and always exits 0 (1 on usage errors);
+thresholds and a gate come separately.
 
 ## `file-naming`
 

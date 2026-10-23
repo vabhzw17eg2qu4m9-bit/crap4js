@@ -398,11 +398,25 @@ separately — raw GC counts are machine-dependent, allocated MB are not.
   parsed past, not summed. Totals span every parsed row; suite/test
   totals carry only window-attributed rows — the difference is exactly
   the bucket.
+- Allocation volume (ported from crap4dart b7c227d): the report and the
+  JSON carry `totalAllocatedMb`, the console headline appends
+  `, allocated N MB` when positive, and the churn leaderboard is titled
+  "top N by allocation volume (churn MB proxy on node)" with an
+  `alloc MB` column. On node `totalAllocatedMb` IS the churn total: V8
+  exposes no exact gross allocation counter to an out-of-process
+  reporter, so the reclaimed-heap proxy is the documented honest value
+  (upstream's Dart engine reports the same proxy; only its Flutter
+  engine reads exact bytes from the VM's allocation profile). Upstream's
+  `--engine auto|dart|flutter` flag is N/A in this port: node is spawned
+  directly by the command (one test file per child), so no
+  flag-swallowing middleware sits between the tool and the measured
+  runtime — there is no engine whose flags need re-routing.
 - Output: console leaderboards (top N by churn, top N by heap growth,
   plus the unattributed line) or `--format json` (stdout stays
   JSON-only, progress on stderr) with `testCount`, `gcCount`,
-  `totalChurnMb`, `totalHeapGrowthMb`, `unattributedCount`,
-  `unattributedChurnMb`, per-suite and per-test entries.
+  `totalChurnMb`, `totalAllocatedMb`, `totalHeapGrowthMb`,
+  `unattributedCount`, `unattributedChurnMb`, per-suite and per-test
+  entries.
 - Churn totals are deterministic at file level (function of the code):
   dogfooding this repo, 382 tests / ~187 GCs / ~197 MB total churn, of
   which ~111 loading/teardown/runner GCs (~55 MB) are unattributed;
