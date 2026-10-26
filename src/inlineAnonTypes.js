@@ -24,7 +24,7 @@
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { gateFiles, toRelPath } from './files.js';
+import { UTF8, gateFiles, toRelPath } from './files.js';
 import { applyGateArg, runCheck } from './gateCommon.js';
 import { childrenOf, isNode, parseSource } from './complexity.js';
 
@@ -135,7 +135,7 @@ export function inlineAnonTypesViolations(files, projectRoot, opts = {}) {
   const violations = [];
   let checked = 0;
   for (const file of files) {
-    const ast = parseSource(readFileSync(file, 'utf8'), path.extname(file));
+    const ast = parseSource(readFileSync(file, UTF8), path.extname(file));
     const { shapes, signatures } = signatureShapes(ast.program);
     checked += signatures;
     for (const s of shapes) {

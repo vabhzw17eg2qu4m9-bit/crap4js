@@ -6,7 +6,7 @@
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { gateFiles, toRelPath } from './files.js';
+import { UTF8, gateFiles, toRelPath } from './files.js';
 import { runCheck } from './gateCommon.js';
 import { childrenOf, computeComplexity, isNode, parseSource } from './complexity.js';
 
@@ -63,7 +63,7 @@ export function classSizeViolations(files, projectRoot) {
   const violations = [];
   let checked = 0;
   for (const file of files) {
-    const ast = parseSource(readFileSync(file, 'utf8'), path.extname(file));
+    const ast = parseSource(readFileSync(file, UTF8), path.extname(file));
     for (const t of classTotals(ast.program)) {
       checked++;
       pushOverlaps(t, violations, toRelPath(file, projectRoot));

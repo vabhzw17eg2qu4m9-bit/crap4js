@@ -8,6 +8,7 @@
 // with s[id] > 0, total = intersecting statements. Result is covered/total, or
 // null when no statements intersect.
 
+import { UTF8 } from './files.js';
 import { readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 
@@ -20,7 +21,7 @@ import path from 'node:path';
  * @returns {Map<string, object>}
  */
 export function loadCoverage(filePath, projectRoot) {
-  const raw = JSON.parse(readFileSync(filePath, 'utf8'));
+  const raw = JSON.parse(readFileSync(filePath, UTF8));
   const canonicalRoot = realpathOrSelf(projectRoot);
   const map = new Map();
   const exact = new Set();

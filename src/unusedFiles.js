@@ -7,7 +7,7 @@
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { gateFiles, toRelPath } from './files.js';
+import { UTF8, gateFiles, toRelPath } from './files.js';
 import { runCheck, skipPartialSelection } from './gateCommon.js';
 import { parseSource } from './complexity.js';
 import { collectImports, resolveImport } from './imports.js';
@@ -22,7 +22,7 @@ import { collectImports, resolveImport } from './imports.js';
 export function unusedFilesViolations(files, projectRoot) {
   const imported = new Set();
   for (const file of files) {
-    const ast = parseSource(readFileSync(file, 'utf8'), path.extname(file));
+    const ast = parseSource(readFileSync(file, UTF8), path.extname(file));
     for (const spec of collectImports(ast.program)) {
       const resolved = resolveImport(spec, file, projectRoot);
       if (resolved) imported.add(resolved);

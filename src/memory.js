@@ -44,6 +44,7 @@
 //
 // Informational: always exits 0; usage errors exit 1.
 
+import { UTF8 } from './files.js';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import {
@@ -411,7 +412,7 @@ export function profileFilesSync(files, cwd) {
     if (r.status !== 0 || !readFileSyncSafe(out)) {
       throw new Error('memory: profiling run failed');
     }
-    return JSON.parse(readFileSync(out, 'utf8'));
+    return JSON.parse(readFileSync(out, UTF8));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -419,7 +420,7 @@ export function profileFilesSync(files, cwd) {
 
 function readFileSyncSafe(file) {
   try {
-    return readFileSync(file, 'utf8');
+    return readFileSync(file, UTF8);
   } catch {
     return null;
   }

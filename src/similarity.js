@@ -14,7 +14,7 @@
 
 import path from 'node:path';
 import { readFileSync, statSync } from 'node:fs';
-import { expandPaths, toRelPath } from './files.js';
+import { UTF8, expandPaths, toRelPath } from './files.js';
 import { globToRegExp } from './bannedImports.js';
 import { applyGateArg } from './gateCommon.js';
 
@@ -228,7 +228,7 @@ export function analyzeSimilarity(projectRoot, opts) {
   let skipped = 0;
   for (const file of collect(projectRoot, opts.dirs, include, exclude)) {
     const shingles = shinglesFor(
-      readFileSync(file, 'utf8'),
+      readFileSync(file, UTF8),
       profileFor(toRelPath(file, projectRoot)),
     );
     if (shingles.size < opts.minShingles) {

@@ -9,6 +9,7 @@
 //   crapScore: number|null
 // }
 
+import { UTF8 } from './files.js';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { extractMethods } from './complexity.js';
@@ -67,7 +68,7 @@ function analyzeFile(file, projectRoot, coverageMap, warn, metric) {
   const rel = path.relative(projectRoot, file).split(path.sep).join('/');
   let methods;
   try {
-    methods = extractMethods(readFileSync(file, 'utf8'), {
+    methods = extractMethods(readFileSync(file, UTF8), {
       ext: path.extname(file),
       metric,
     });

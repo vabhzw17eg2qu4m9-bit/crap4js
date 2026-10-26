@@ -8,6 +8,7 @@
 // fingerprint (tool version, operators, test_args) — any mismatch, corrupt
 // file, or version change wipes the cache into a full re-execution.
 
+import { UTF8 } from './files.js';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 
@@ -24,7 +25,7 @@ export function fnv1a64Hex(text) {
   let hash = 0xcbf29ce484222325n;
   const prime = 0x1000001b3n;
   const mask = 0x7fffffffffffffffn;
-  for (const byte of Buffer.from(text, 'utf8')) {
+  for (const byte of Buffer.from(text, UTF8)) {
     hash = ((hash ^ BigInt(byte)) * prime) & mask;
   }
   return hash.toString(16).padStart(16, '0');
@@ -120,7 +121,7 @@ export class MutationCache {
   static load(path, meta) {
     if (!existsSync(path)) return new MutationCache(meta);
     try {
-      const decoded = JSON.parse(readFileSync(path, 'utf8'));
+      const decoded = JSON.parse(readFileSync(path, UTF8));
       if (decoded?.version !== MUTATION_CACHE_VERSION) return new MutationCache(meta);
       if (!metaMatches(decoded.meta ?? {}, meta)) return new MutationCache(meta);
       return new MutationCache(meta, readMethods(decoded.methods));

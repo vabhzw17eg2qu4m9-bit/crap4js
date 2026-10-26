@@ -9,7 +9,7 @@
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { gateFiles, toRelPath } from './files.js';
+import { UTF8, gateFiles, toRelPath } from './files.js';
 import { applyGateArg, runCheck } from './gateCommon.js';
 import { parseSource } from './complexity.js';
 import { collectImports, resolveImport } from './imports.js';
@@ -105,7 +105,7 @@ export function bannedImportViolations(files, projectRoot, rules) {
 }
 
 function violationsIn(file, rel, rules, projectRoot) {
-  const ast = parseSource(readFileSync(file, 'utf8'), path.extname(file));
+  const ast = parseSource(readFileSync(file, UTF8), path.extname(file));
   const out = [];
   for (const spec of collectImports(ast.program)) {
     const rule = rules.find((r) => matchesForbid(r, spec, file, projectRoot));

@@ -24,7 +24,7 @@ import {
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { analyze } from './analyzer.js';
-import { findSourceFiles } from './files.js';
+import { UTF8, findSourceFiles } from './files.js';
 import { instrumentSource } from './instrument.js';
 import { padLeft, padRight } from './report.js';
 
@@ -228,7 +228,7 @@ function writeInstrumented(file, root, tempDir) {
 // Files that fail to parse are copied verbatim (silently) — same policy as
 // upstream crap4dart's instrumenter.
 function instrumentedContent(file, root, rel) {
-  const source = readFileSync(file, 'utf8');
+  const source = readFileSync(file, UTF8);
   try {
     return instrumentSource(source, {
       ext: path.extname(file),
@@ -288,7 +288,7 @@ function isPidOutput(name, base) {
 function mergeTimingFile(merged, file) {
   let data;
   try {
-    data = JSON.parse(readFileSync(file, 'utf8'));
+    data = JSON.parse(readFileSync(file, UTF8));
   } catch {
     return;
   }
