@@ -44,7 +44,11 @@
 //                            ({...} / [...]) in function signature
 //                            annotations, incl. nested in type arguments;
 //                            no-op on plain .js (no type syntax there).
-//   crap4js folder-structure Flag src/ dirs with loose (direct) files.
+//   crap4js folder-structure [--dir GLOB]... [--max-loose-files N]
+//                      [--cap PATTERN:N]... [--exclude GLOB]...
+//                            Flag directories holding more than their cap
+//                            of loose (direct) source files; --cap gives
+//                            per-pattern caps (first pattern wins)
 //   crap4js skill            Print the crap4js profiling skill for AI agents.
 //
 // The first argument selects a subcommand when it is exactly `profile`,
@@ -140,8 +144,11 @@ function usage() {
     '                           / [...]) in function signature annotations,',
     '                           incl. nested in type arguments; plain .js',
     '                           has no type syntax, so it is a no-op there',
-    '  crap4js folder-structure',
-    '                           Flag src/ directories with loose direct files',
+    '  crap4js folder-structure [--dir GLOB]... [--max-loose-files N]',
+    '                      [--cap PATTERN:N]... [--exclude GLOB]...',
+    '                           Flag directories holding more than their',
+    '                           cap of loose (direct) source files; --cap',
+    '                           gives per-pattern caps (first pattern wins)',
     '  crap4js mutation [--min-score N] [--max-survivors N]',
     '                   [--timeout-seconds N] [--max-mutants N]',
     '                   [--cache|--no-cache] [--test-args ARG]...',

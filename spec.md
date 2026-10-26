@@ -477,7 +477,8 @@ crap4js has no gate framework and no config file, so each gate is
 a CLI subcommand with its built-in default thresholds; every gate accepts
 `[paths...]` (default: the normal source-selection rules, test files and
 test directories always excluded — except `test-assertions`, which checks
-test files, and `folder-structure`, which takes no arguments). Shared
+test files, and `folder-structure`, which selects directories by flag and
+takes no paths). Shared
 output contract: one `file[:line]: message` line per violation, then a
 one-line summary; exit codes `0` pass, `1` usage error, `2` violations.
 
@@ -832,16 +833,47 @@ anonymous types in signatures`. Exit 2 iff violations exist.
 
 ### folder-structure
 
-Port of the crap4dart 0.9.x folder_structure gate with max_loose_files=0
-and the default dir baked in (`src`, the port's source root): flags
-directories containing more than zero source files DIRECTLY —
-`N loose files directly in src — group them into feature packages
-(max 0)`. Only direct children count (non-recursive; every source
-extension, test colocates included); files in subdirectories are the
-organized form; a missing `src/` checks nothing and passes. Summary:
+Port of the crap4dart folder_structure gate (commit 753c3580). Flags
+directories holding more than their cap of logical source units
+DIRECTLY — a flat-file sprawl that should be organized into feature
+packages. Only a directory's OWN contents count (non-recursive; every
+source extension, test colocates included) — files in subdirectories
+are the organized form and never reach the parent's budget; a missing
+directory checks nothing and passes. Violation: `N loose files directly
+in DIR — group them into feature packages (max CAP)`. Summary:
 `M directories organized into packages` / `N directory(ies) with
-loose-file sprawl`. Takes no arguments — any argument is a usage error
-(exit 1).
+loose-file sprawl`.
+
+Two configuration shapes, mapped from upstream's YAML `dirs`/
+`max_loose_files`/`config` keys to flags:
+
+- **Classic** (default `--dir src`, `--max-loose-files 0`): every
+  repeatable `--dir GLOB` entry — a literal path or a glob pattern
+  (`src/*`, `packages/**`) expanding to every matching directory —
+  shares one `--max-loose-files N` cap. With no `--dir` flags the
+  default `src` (the port's source root) applies.
+- **Per-pattern caps**: repeatable `--cap PATTERN:N` entries are
+  upstream's `config` map (`--cap 'src:3' --cap 'src/**:30'` — a
+  registry folder may hold more than a hot core directory). When any
+  `--cap` is present it takes precedence and `--dir`/`--max-loose-files`
+  are not consulted. A directory matched by several caps uses the FIRST
+  cap's value (flag order). Non-integer caps are usage errors (exit 1).
+
+Counting rules: generated siblings of one source file collapse into a
+single logical unit — the js-idiomatic suffix set `.d.ts` (declaration
+files) and `.min.js` (minified bundles): `magic.js`, `magic.d.ts` and
+`magic.min.js` share the stem `magic` and count once (upstream's dart
+set is `.g.dart`/`.freezed.dart`; everything else, e.g. `foo.g.js`,
+counts as its own unit). `--exclude GLOB` (repeatable, matched on the
+project-relative path) drops files from the count. Glob expansion never
+enumerates hidden entries (dot-prefixed: `.git`, `.idea`, ...) or build
+and tooling output (`node_modules`, `build`, `dist`, `coverage`).
+Positional arguments stay a usage error — directories are selected by
+flag, not by path (exit 1). With no flags the verdict on ordinary
+source trees matches the pre-flag version (default `src`, cap 0); stem
+collapse is unconditional, so a directory holding generated siblings of
+one file counts fewer logical units than the old raw-file count. Exit 2
+iff violations exist.
 
 ### mutation
 
