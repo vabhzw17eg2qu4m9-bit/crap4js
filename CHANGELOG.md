@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.21.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.20.0...v0.21.0) (2026-10-26)
+
+
+### Features
+
+* **gate:** scattered-constants gate ([#61](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/61)) ([c3d3afa](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/c3d3afab72aaa4b1a57397743d30cef6510a0a6b))
+
 ## [0.20.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.19.0...v0.20.0) (2026-10-23)
 
 
