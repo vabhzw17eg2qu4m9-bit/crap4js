@@ -4,6 +4,7 @@
 // answers whether a line range intersects them. Keys are project-relative
 // paths of the new file versions; deleted files are absent.
 
+import { UTF8 } from './files.js';
 import { spawnSync } from 'node:child_process';
 
 /**
@@ -72,7 +73,7 @@ export function diffIntersects(added, rel, startLine, endLine) {
  * @returns {Map<string, Set<number>>}
  */
 export function gitChangedLines(ref, relPaths, cwd, spawn = spawnSync) {
-  const result = spawn('git', ['diff', '--unified=0', ref, '--', ...relPaths], { cwd, encoding: 'utf8' });
+  const result = spawn('git', ['diff', '--unified=0', ref, '--', ...relPaths], { cwd, encoding: UTF8 });
   if (result.status !== 0) {
     throw new Error(`git diff ${ref} failed: ${(result.stderr ?? '').trim()}`);
   }

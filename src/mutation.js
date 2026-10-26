@@ -39,7 +39,7 @@ import { spawnSync } from 'node:child_process';
 import { childrenOf, extractMethodsWithNodes, isNode, parseTokenized } from './complexity.js';
 import { loadCoverage } from './coverage.js';
 import { globToRegExp } from './bannedImports.js';
-import { gateFiles, isTestPath, toRelPath } from './files.js';
+import { UTF8, gateFiles, isTestPath, toRelPath } from './files.js';
 import { applyGateArg, runCheck } from './gateCommon.js';
 import { diffIntersects, gitChangedLines } from './diffLines.js';
 import { MUTATION_CACHE_FILE_NAME, MutationCache, cacheMetaCurrent, fnv1a64Hex, methodsKey } from './mutationCache.js';
@@ -363,7 +363,7 @@ function recordOutcome(site, outcome, state) {
 }
 
 function executeSite(projectRoot, site, timeoutMs, runner, testArgs) {
-  const original = readFileSync(site.file, 'utf8');
+  const original = readFileSync(site.file, UTF8);
   writeFileSync(site.file, original.slice(0, site.offset) + site.mutant + original.slice(site.offset + site.length));
   try {
     return runner(projectRoot, timeoutMs, testArgs);
@@ -377,7 +377,7 @@ function executeSite(projectRoot, site, timeoutMs, runner, testArgs) {
 function snapshotOriginals(sites) {
   const originals = new Map();
   for (const s of sites) {
-    if (!originals.has(s.file)) originals.set(s.file, readFileSync(s.file, 'utf8'));
+    if (!originals.has(s.file)) originals.set(s.file, readFileSync(s.file, UTF8));
   }
   return originals;
 }
@@ -387,7 +387,7 @@ function snapshotOriginals(sites) {
 function verifyIntegrity(originals) {
   const violations = [];
   for (const [file, content] of originals) {
-    if (readFileSync(file, 'utf8') !== content) {
+    if (readFileSync(file, UTF8) !== content) {
       writeFileSync(file, content);
       violations.push(file);
     }
@@ -600,7 +600,7 @@ function selectSites(files, projectRoot, opts, coverage) {
 }
 
 function scanFileSites(file, scan) {
-  const source = readFileSync(file, 'utf8');
+  const source = readFileSync(file, UTF8);
   const rel = toRelPath(file, scan.projectRoot);
   const methods = extractMethodsWithNodes(source, { ext: path.extname(file) });
   const hits = lineHits(scan.coverage.get(rel));

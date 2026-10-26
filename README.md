@@ -69,6 +69,11 @@ crap4js banned-imports [--from GLOB --forbid GLOB --message MSG]... [paths...]
 crap4js magic-constants [paths...]
                          Flag hex colors outside constants and literals
                          repeated 3+ times in one file.
+crap4js scattered-constants [--min-files N] [--min-length N] [--min-value N]
+                         [--ignore VALUE]... [--exclude GLOB]... [paths...]
+                         Flag literals whose value repeats across distinct
+                         files; existing const declarations regress
+                         immediately.
 crap4js duplicates [--threshold N] [--min-tokens N] [--min-lines N]
                    [--report percentage|clones] [--ignore-locals]
                    [--ignore-literals] [--ignore-identifiers]
@@ -117,8 +122,9 @@ usage error.
 
 The gate-check subcommands (`file-naming`, `nesting`, `class-size`,
 `weight-of-class`, `unused-code`, `unused-files`, `banned-imports`,
-`magic-constants`, `duplicates`, `similarity`, `test-assertions`,
-`inline-anon-types`, `folder-structure`, `mutation`) are ports of
+`magic-constants`, `scattered-constants`, `duplicates`, `similarity`,
+`test-assertions`, `inline-anon-types`, `folder-structure`, `mutation`)
+are ports of
 crap4dart gates. crap4js has no gate framework or config
 file, so each gate is a subcommand with its default thresholds and the
 shared exit-code contract: `0` pass/skip, `1` usage error, `2` violations
@@ -380,6 +386,50 @@ are skipped; plain no-interpolation templates count as strings. Defaults
 are baked in (min_duplicates=3, min_length=4, hex rule on) — crap4js has
 no config. Any `--flag` argument is a usage error (exit 1). Exit 2 iff
 violations exist.
+
+## `scattered-constants`
+
+`crap4js scattered-constants [--min-files N] [--min-length N]
+[--min-value N] [--ignore VALUE]... [--exclude GLOB]... [paths...]` (port
+of crap4dart e766d68's scattered_constants gate, v2) is the corpus-wide
+sibling of `magic-constants`: that gate counts in-file repeats only, so a
+literal used once per file in K files is invisible to it — the "change
+`86400` in every service" hazard. Two finding kinds on whole literal
+values:
+
+- **Constant regression** — a `const` with the value already exists
+  anywhere in the corpus: every hardcoded re-introduction (a bare literal
+  or a duplicate local const, any occurrence count, even in the declaring
+  file) is flagged immediately as `hardcoded <value> duplicates constant
+  \`NAME\` (file:line) — reference the constant instead of repeating the
+  literal`. No `--min-files` wait — the fact has a home; you do not get
+  to re-hardcode it while the gate is silent. The first declaration wins
+  when constants share a value; the winning declaration's own site never
+  flags itself.
+- **Scattered literal** — no constant exists yet and the value appears in
+  `--min-files` (default 3) distinct files: one violation per occurrence,
+  `literal <value> repeats in N files (M occurrences) — extract a shared
+  constant and reference it from every site; verify all occurrences mean
+  the same thing first` (the same value is sometimes coincidence; the
+  gate highlights, intent stays human).
+
+Values compare semantically: strings by value (plain template literals
+included), numbers by numeric value — digit separators (`86_400`) do not
+split a fact (`magic-constants` compares raw lexemes; this gate does
+not). Interpolated templates and computed initializers never register or
+count. Never counted: strings shorter than `--min-length` (4), numbers
+with magnitude at or below `--min-value` (100 — 0, 1, 10, 100 happen
+everywhere), protocol positions — object/dict keys, computed member
+indexes (`obj['name']`), switch case labels (the shared rule with
+`magic-constants`) — and import/export source specifiers (the JS analog
+of upstream's exempt import/export/part URIs). `--ignore VALUE` exempts a
+value permanently: strings by value, numbers by their decimal form;
+entries containing `/` are file-path globs exempting whole files instead
+(a plain word silences the word, not a folder). `--exclude GLOB` drops
+files from the count; the default `src/` selection already excludes test
+files (the JS-side default for upstream's generated + `test/**` globs).
+Exit 2 iff violations exist; unknown flags and invalid numbers are usage
+errors (exit 1).
 
 ## `duplicates`
 
@@ -748,6 +798,7 @@ crap4js/
     unusedFiles.js unused-files command
     bannedImports.js  banned-imports command
     magicConstants.js  magic-constants command
+    scatteredConstants.js  scattered-constants command
     testAssertions.js  test-assertions command
     inlineAnonTypes.js  inline-anon-types command
     folderStructure.js  folder-structure command

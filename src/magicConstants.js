@@ -10,7 +10,7 @@
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { gateFiles, toRelPath } from './files.js';
+import { UTF8, gateFiles, toRelPath } from './files.js';
 import { runCheck } from './gateCommon.js';
 import { childrenOf, isNode, parseSource } from './complexity.js';
 
@@ -30,7 +30,7 @@ export function magicConstantsViolations(files, projectRoot) {
   let checked = 0;
   for (const file of files) {
     checked++;
-    const ast = parseSource(readFileSync(file, 'utf8'), path.extname(file));
+    const ast = parseSource(readFileSync(file, UTF8), path.extname(file));
     violations.push(...fileViolations(ast.program, toRelPath(file, projectRoot)));
   }
   return { violations, checked };
@@ -84,7 +84,8 @@ function visit(node, parent, state) {
 // non-literals. Numbers count by raw lexeme, strings by value; template
 // literals with interpolations are skipped entirely (JS has no adjacent-
 // string concatenation, so no merged-value handling is needed).
-function literalValue(node) {
+// Shared with the scattered-constants gate (upstream literal_locations.dart).
+export function literalValue(node) {
   // Babel keeps the raw lexeme in `extra.raw`.
   if (node.type === 'NumericLiteral') return node.extra?.raw ?? String(node.value);
   if (node.type === 'StringLiteral') return node.value;
@@ -112,6 +113,7 @@ function record(node, parent, state) {
 // JSON field, channel, or enum value — not a magic constant; extracting
 // it adds noise (crap4dart 0.7.2 / 0.8.3 / 0.8.5). Maps the parent node
 // type to the child field that holds the key/index/label.
+// Shared with the scattered-constants gate (upstream literal_locations.dart).
 const IDENTIFIER_POSITIONS = {
   ObjectProperty: 'key',
   MemberExpression: 'property',
@@ -119,7 +121,7 @@ const IDENTIFIER_POSITIONS = {
   SwitchCase: 'test',
 };
 
-function isIdentifierPosition(node, parent) {
+export function isIdentifierPosition(node, parent) {
   const field = IDENTIFIER_POSITIONS[parent?.type];
   return field !== undefined && node.type === 'StringLiteral' && parent[field] === node;
 }

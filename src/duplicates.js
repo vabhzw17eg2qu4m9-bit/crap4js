@@ -30,7 +30,7 @@
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { expandPaths, gateFiles, isAnySourceFile, isTestPath, toRelPath } from './files.js';
+import { UTF8, expandPaths, gateFiles, isAnySourceFile, isTestPath, toRelPath } from './files.js';
 import { globToRegExp } from './bannedImports.js';
 import { parseTokenized, SKIP_KEYS, tokenizeSource } from './complexity.js';
 import { applyGateArg, runCheck } from './gateCommon.js';
@@ -186,7 +186,7 @@ function tokenizeFiles(files, projectRoot, opts) {
   const masked = MASKING_KEYS.some((key) => opts[key]);
   const bags = [];
   for (const file of files) {
-    const source = readFileSync(file, 'utf8');
+    const source = readFileSync(file, UTF8);
     const ext = path.extname(file);
     const tokens = masked
       ? normalizedTokens(source, ext, opts)

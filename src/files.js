@@ -7,6 +7,10 @@ import path from 'node:path';
 const SOURCE_EXTS = new Set(['.js', '.mjs', '.cjs', '.jsx', '.ts', '.tsx']);
 const CHANGE_STATUS = new Set(['M', 'A', 'R', 'C', '?']);
 
+// The one encoding every source is read with (scattered-constants dogfood:
+// the spelling lived hardcoded in 20+ files).
+export const UTF8 = 'utf8';
+
 // Colocated test files — excluded so they don't pollute the production metric.
 const TEST_FILE_RE = /\.(spec|test)\.(js|jsx|ts|tsx)$/;
 
@@ -27,7 +31,7 @@ export function changedFiles(projectRoot) {
   const result = spawnSync(
     'git',
     ['-C', projectRoot, 'status', '--porcelain'],
-    { encoding: 'utf8' },
+    { encoding: UTF8 },
   );
   if (result.error) {
     throw new Error(`git status failed to start: ${result.error.message}`);

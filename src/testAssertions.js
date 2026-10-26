@@ -9,7 +9,7 @@
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { testFiles, toRelPath } from './files.js';
+import { UTF8, testFiles, toRelPath } from './files.js';
 import { runCheck } from './gateCommon.js';
 import { childrenOf, isNode, parseSource } from './complexity.js';
 
@@ -36,7 +36,7 @@ export function testAssertionViolations(files, projectRoot) {
   const violations = [];
   let checked = 0;
   for (const file of files) {
-    const ast = parseSource(readFileSync(file, 'utf8'), path.extname(file));
+    const ast = parseSource(readFileSync(file, UTF8), path.extname(file));
     const bindings = assertBindings(ast.program);
     for (const t of findTests(ast.program)) {
       checked++;

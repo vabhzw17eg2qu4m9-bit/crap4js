@@ -55,6 +55,11 @@ crap4js banned-imports [--from GLOB --forbid GLOB --message MSG]... [paths...]
 crap4js magic-constants [paths...]
                          Flag hex colors outside constants and literals
                          repeated 3+ times in one file.
+crap4js scattered-constants [--min-files N] [--min-length N] [--min-value N]
+                         [--ignore VALUE]... [--exclude GLOB]... [paths...]
+                         Flag literals whose value repeats across distinct
+                         files; existing const declarations regress
+                         immediately.
 crap4js duplicates [--threshold N] [--min-tokens N] [--min-lines N]
                    [--report percentage|clones] [--ignore-locals]
                    [--ignore-literals] [--ignore-identifiers]
@@ -81,7 +86,8 @@ crap4js skill            Print the crap4js profiling skill for AI agents.
 
 The first argument selects a subcommand when it is exactly `profile`,
 `file-naming`, `nesting`, `class-size`, `weight-of-class`, `unused-code`,
-`unused-files`, `banned-imports`, `magic-constants`, `duplicates`, `test-assertions`,
+`unused-files`, `banned-imports`, `magic-constants`, `scattered-constants`,
+`duplicates`, `test-assertions`,
 `inline-anon-types`, `folder-structure`, `mutation`, or `skill`; anything else (flags, paths)
 is analyzed as the CRAP command above. `--changed` is mutually exclusive
 with explicit paths. Unknown flags are a usage error (exit 1).
@@ -249,7 +255,7 @@ threshold; otherwise `passed`.
 |------|-----------------------------------------------------------------------------|
 | `0`  | Success (including empty selection, or max numeric CRAP ≤ threshold).       |
 | `1`  | CLI usage error (bad flag, bad threshold, `--changed` + paths, unreadable, banned-imports rule misuse). |
-| `2`  | CRAP threshold exceeded (`CRAP threshold exceeded: <max> > <threshold>` on stderr), profile threshold exceeded, or gate-subcommand violations (file-naming, nesting, class-size, weight-of-class, unused-code, unused-files, banned-imports, magic-constants, duplicates, test-assertions, inline-anon-types, folder-structure). |
+| `2`  | CRAP threshold exceeded (`CRAP threshold exceeded: <max> > <threshold>` on stderr), profile threshold exceeded, or gate-subcommand violations (file-naming, nesting, class-size, weight-of-class, unused-code, unused-files, banned-imports, magic-constants, scattered-constants, duplicates, test-assertions, inline-anon-types, folder-structure). |
 
 ## `--run-tests`
 
@@ -465,7 +471,8 @@ magic_constants gate; `test-assertions`, `folder-structure`, and
 folder_structure, and duplication gates; `inline-anon-types` is a port
 of the crap4dart 4d844a4 record gates (`inline_record_types` +
 `record_size`, merged and adapted); `mutation` is a port of the
-crap4dart mutation gate (commit c865ec3).
+crap4dart mutation gate (commit c865ec3); `scattered-constants` is a
+port of the crap4dart scattered_constants gate (commit e766d68, v2).
 crap4js has no gate framework and no config file, so each gate is
 a CLI subcommand with its built-in default thresholds; every gate accepts
 `[paths...]` (default: the normal source-selection rules, test files and
@@ -576,6 +583,67 @@ glob-regex caching (compile per pattern, not per file) is likewise
 already the port's shape — rules are compiled once per run before the
 file loop. The 0.8.7 stable N/A-row ordering (tie-break by file:line)
 was already the port's sort contract.
+
+### scattered-constants
+
+Port of the crap4dart scattered_constants gate (commit e766d68, v2) —
+the corpus-wide sibling of `magic-constants`: that gate counts in-file
+repeats only, so a literal used once per file in K files is invisible to
+every per-file gate. The command scans the whole corpus, counts distinct
+files per literal value, and distinguishes two findings.
+
+*Constant regression*: the corpus already declares a named `const` with
+the value — every hardcoded re-introduction (a bare literal or a
+duplicate local `const`, any occurrence count, including the declaring
+file) is flagged immediately as `hardcoded <value> duplicates constant
+\`NAME\` (file:line) — reference the constant instead of repeating the
+literal`; no `--min-files` wait. The first declaration wins when
+constants share a value; the winning declaration's own site never flags
+itself, while a bare literal next to it in the same file does.
+
+*Scattered literal*: no constant exists yet and the value reached
+`--min-files` (default 3) distinct files — one violation per occurrence
+(file plus line): `literal <value> repeats in N files (M occurrences) —
+extract a shared constant and reference it from every site; verify all
+occurrences mean the same thing first`. The gate highlights, intent
+stays human — the same value is sometimes coincidence.
+
+Values compare semantically: string literals by value (expression-less
+template literals included), numbers by numeric value — digit separators
+(`86_400`) do not split a fact (`magic-constants` counts raw lexemes;
+this gate does not). Literals never counted: strings shorter than
+`--min-length` (default 4), numbers with magnitude at or below
+`--min-value` (default 100), map keys, computed member indexes and
+switch case labels (the protocol-identifier rule shared with
+`magic-constants`), and import/export source specifiers (the JS analog
+of upstream's exempt import/export/part/part-of URIs). Interpolated
+templates and computed initializers never register as constants; a
+`const` whose initializer is a plain string/number literal registers
+exactly one const-decl site.
+
+`--ignore VALUE` exempts a value permanently: strings by value, numbers
+by their decimal form — generic vocabulary whose extraction adds churn
+without benefit. Entries containing a `/` are file-path globs instead:
+files matching them are exempt entirely (a plain word silences the word,
+not a folder). `--exclude GLOB` drops files from the count altogether;
+the default `src/` selection already excludes test files — the JS-side
+default for upstream's generated + `test/**` exclude globs (crap4js has
+no generated-code convention). Flags: `--min-files` (int ≥ 0, default
+3), `--min-length`, `--min-value`, repeatable `--ignore`/`--exclude`;
+`--flag VALUE` and `--flag=VALUE` both accepted, any other argument is a
+path. Exit 2 iff violations exist; unknown flags (`--x=y`) and invalid
+numbers are usage errors (exit 1).
+
+Adaptation notes: upstream's config surface (`enabled`, `severity`,
+`ignorable`, `min_files`, `min_length`, `min_value`, `ignore`,
+`exclude`) becomes the flags above — crap4js has no config file; the
+gate is default-on as a subcommand. Upstream's `deep_search` option and
+the short-lived `scattered_fragments` gate were both removed again in
+the same upstream commit (v2) and were never ported. Dart
+adjacent-strings merging has no JS analog (no literal juxtaposition), so
+no merged-value handling exists. The port reuses `magic-constants`'
+protocol-identifier and literal-kind helpers (the JS analog of
+upstream's shared literal_locations.dart extraction).
 
 ### duplicates
 

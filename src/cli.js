@@ -49,9 +49,9 @@
 //
 // The first argument selects a subcommand when it is exactly `profile`,
 // `file-naming`, `nesting`, `class-size`, `weight-of-class`, `unused-code`,
-// `unused-files`, `banned-imports`, `magic-constants`, `duplicates`,
-// `similarity`, `test-assertions`, `inline-anon-types`, `folder-structure`,
-// `mutation`, `memory`, or `skill`;
+// `unused-files`, `banned-imports`, `magic-constants`, `scattered-constants`,
+// `duplicates`, `similarity`, `test-assertions`, `inline-anon-types`,
+// `folder-structure`, `mutation`, `memory`, or `skill`;
 // anything else is analyzed as before.
 //
 // Exit codes: 0 success; 1 usage error; 2 CRAP/profile threshold exceeded
@@ -70,6 +70,7 @@ import { runUnusedCode } from './unusedCode.js';
 import { runUnusedFiles } from './unusedFiles.js';
 import { runBannedImports } from './bannedImports.js';
 import { runMagicConstants } from './magicConstants.js';
+import { runScatteredConstants } from './scatteredConstants.js';
 import { runDuplicates } from './duplicates.js';
 import { runSimilarity } from './similarity.js';
 import { runTestAssertions } from './testAssertions.js';
@@ -116,6 +117,13 @@ function usage() {
     '  crap4js magic-constants [paths...]',
     '                           Flag hex colors outside constants and literals',
     '                           repeated 3+ times per file.',
+    '  crap4js scattered-constants [--min-files N] [--min-length N]',
+    '                     [--min-value N] [--ignore VALUE]... [--exclude GLOB]...',
+    '                     [paths...]',
+    '                           Flag literals whose value repeats across',
+    '                           distinct files: existing const declarations',
+    '                           regress immediately, scattered values need',
+    '                           --min-files files',
     '  crap4js duplicates [--threshold N] [--min-tokens N] [--min-lines N]',
     '                     [--report percentage|clones] [--ignore-locals]',
     '                     [--ignore-literals] [--ignore-identifiers]',
@@ -175,6 +183,7 @@ const SUBCOMMANDS = {
   'unused-files': (args, ctx) => runUnusedFiles(args, ctx),
   'banned-imports': (args, ctx) => runBannedImports(args, ctx),
   'magic-constants': (args, ctx) => runMagicConstants(args, ctx),
+  'scattered-constants': (args, ctx) => runScatteredConstants(args, ctx),
   duplicates: (args, ctx) => runDuplicates(args, ctx),
   similarity: (args, ctx) => runSimilarity(args, ctx),
   'test-assertions': (args, ctx) => runTestAssertions(args, ctx),
