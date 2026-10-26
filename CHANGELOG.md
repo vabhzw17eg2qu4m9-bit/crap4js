@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.21.0...v0.22.0) (2026-10-26)
+
+
+### Features
+
+* **gate:** folder-structure fan-out cap + glob dirs + stem collapse (adapted from upstream 753c3580) ([#63](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/63)) ([edfae70](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/edfae701549376de87cf452cca11dfe6140cf8d3))
+
 ## [0.21.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.20.0...v0.21.0) (2026-10-26)
 
 
