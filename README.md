@@ -93,7 +93,11 @@ crap4js inline-anon-types [--max-fields N] [paths...]
                          in function signature annotations, incl. nested
                          in type arguments; plain .js has no type syntax,
                          so it is a no-op there.
-crap4js folder-structure Flag src/ directories with loose direct files.
+crap4js folder-structure [--dir GLOB]... [--max-loose-files N]
+                         [--cap PATTERN:N]... [--exclude GLOB]...
+                         Flag directories over their cap of loose
+                         (direct) source files; --cap gives per-pattern
+                         caps (first pattern wins).
 crap4js mutation [--min-score N] [--max-survivors N]
                  [--timeout-seconds N] [--max-mutants N]
                  [--cache|--no-cache] [--test-args ARG]...
@@ -556,13 +560,22 @@ flow-annotated `.js` files. Exit 2 iff violations exist.
 ## `folder-structure`
 
 `crap4js folder-structure` (port of crap4dart's folder_structure gate,
-0.9.x) flags directories containing more than `max_loose_files` (default
-0) source files DIRECTLY — a flat-file sprawl that should be organized
-into feature packages. Only direct children of `src/` (the port's source
-root) count; files in subdirectories are the organized form. Violation:
-`N loose files directly in src — group them into feature packages
-(max 0)`. Takes no arguments (any argument is a usage error); the
-directory and threshold are baked in. Exit 2 iff violations exist.
+commit 753c3580) flags directories holding more than their cap of
+logical source units DIRECTLY — a flat-file sprawl that should be
+organized into feature packages. Only a directory's own files count;
+files in subdirectories are the organized form. Violation: `N loose
+files directly in DIR — group them into feature packages (max CAP)`.
+
+Two forms: the classic `--dir GLOB` (repeatable; literal path or glob
+like `src/*`) + shared `--max-loose-files N` (defaults: `src`, `0`),
+and repeatable `--cap PATTERN:N` per-pattern caps (upstream's `config`
+map, e.g. `--cap 'src:3' --cap 'src/**:30'`) which take precedence when
+present — a directory matched by several caps uses the first one's.
+Generated siblings of one source file collapse into one logical unit
+(`magic.js` + `magic.d.ts` + `magic.min.js` share the stem `magic`);
+`--exclude GLOB` drops files from the count; glob expansion skips
+hidden and build directories (`node_modules`, `build`, `dist`,
+`coverage`). Exit 2 iff violations exist.
 
 ## `mutation`
 
