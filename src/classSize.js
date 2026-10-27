@@ -8,13 +8,14 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { UTF8, gateFiles, toRelPath } from './files.js';
 import { runCheck } from './gateCommon.js';
+import { ANON, CLASS_METHOD, CLASS_PRIVATE_METHOD, CONSTRUCTOR } from './complexity.js';
 import { childrenOf, computeComplexity, isNode, parseSource } from './complexity.js';
 
 const MAX_METHODS = 25;
 const MAX_WMC = 80;
 
 const CLASS_TYPES = new Set(['ClassDeclaration', 'ClassExpression']);
-const METHOD_TYPES = new Set(['ClassMethod', 'ClassPrivateMethod']);
+const METHOD_TYPES = new Set([CLASS_METHOD, CLASS_PRIVATE_METHOD]);
 
 /**
  * Concrete-method count and WMC for every class declared in a parsed
@@ -40,12 +41,12 @@ function totalsOf(cls) {
   let methods = 0;
   let wmc = 0;
   for (const m of cls.body?.body ?? []) {
-    if (!METHOD_TYPES.has(m.type) || m.kind === 'constructor' || !m.body) continue;
+    if (!METHOD_TYPES.has(m.type) || m.kind === CONSTRUCTOR || !m.body) continue;
     methods++;
     wmc += computeComplexity(m.body);
   }
   return {
-    name: cls.id?.name ?? '<anonymous>',
+    name: cls.id?.name ?? ANON,
     line: cls.loc.start.line,
     methods,
     wmc,

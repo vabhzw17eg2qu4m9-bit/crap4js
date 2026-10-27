@@ -4,7 +4,7 @@
 // Port of crap4dart's file_naming gate (0.4.0).
 
 import path from 'node:path';
-import { gateFiles, toRelPath } from './files.js';
+import { UTF8, gateFiles, toRelPath } from './files.js';
 
 // Lower-cased generic stems with no domain meaning. Files with these names
 // accumulate unrelated declarations over time.
@@ -34,7 +34,7 @@ const ALLOWED_STEMS = new Set([
   'crc8', 'crc16', 'crc32', 'f16', 'f32', 'f64', 'h264', 'h265', 'http2',
   'http3', 'i18n', 'i2c', 'int8', 'int16', 'int32', 'int64', 'ipv4',
   'ipv6', 'l10n', 'a11y', 'md5', 'oauth1', 'oauth2', 'sha1', 'sha256',
-  'sha384', 'sha512', 'uint8', 'uint16', 'uint32', 'uint64', 'utf8',
+  'sha384', 'sha512', 'uint8', 'uint16', 'uint32', 'uint64', UTF8,
   'utf16', 'utf32', 'w3c', 'webgl2', 'x509', 'x86', 'x64',
 ]);
 

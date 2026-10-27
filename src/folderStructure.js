@@ -15,6 +15,7 @@
 import path from 'node:path';
 import { lstatSync, readdirSync, statSync } from 'node:fs';
 import { globToRegExp } from './bannedImports.js';
+import { COVERAGE, EXCLUDE } from './constants.js';
 import { applyGateArg } from './gateCommon.js';
 import { looseSourceFiles, toRelPath } from './files.js';
 
@@ -26,13 +27,13 @@ const DIRS = ['src'];
 const GENERATED_SUFFIXES = ['.d.ts', '.min.js'];
 // Directories the glob expansion never enumerates — hidden entries (dot
 // prefixed: .git, .idea, .nyc_output, ...) and build/tooling output.
-const SKIP_DIRS = new Set(['node_modules', 'build', 'dist', 'coverage']);
+const SKIP_DIRS = new Set(['node_modules', 'build', 'dist', COVERAGE]);
 
 const VALUE_FLAGS = {
   '--dir': 'dirs',
   '--max-loose-files': 'maxLooseFiles',
   '--cap': 'caps',
-  '--exclude': 'exclude',
+  '--exclude': EXCLUDE,
 };
 const NUMBER_FLAGS = new Set(['--max-loose-files']);
 

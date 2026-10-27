@@ -56,10 +56,12 @@ crap4js magic-constants [paths...]
                          Flag hex colors outside constants and literals
                          repeated 3+ times in one file.
 crap4js scattered-constants [--min-files N] [--min-length N] [--min-value N]
-                         [--ignore VALUE]... [--exclude GLOB]... [paths...]
+                         [--ignore VALUE]... [--exclude GLOB]...
+                         [--aliases|--no-aliases] [paths...]
                          Flag literals whose value repeats across distinct
                          files; existing const declarations regress
-                         immediately.
+                         immediately, private `const _x = kY;` pure aliases
+                         always.
 crap4js duplicates [--threshold N] [--min-tokens N] [--min-lines N]
                    [--report percentage|clones] [--ignore-locals]
                    [--ignore-literals] [--ignore-identifiers]
@@ -620,7 +622,22 @@ switch case labels (the protocol-identifier rule shared with
 of upstream's exempt import/export/part/part-of URIs). Interpolated
 templates and computed initializers never register as constants; a
 `const` whose initializer is a plain string/number literal registers
-exactly one const-decl site.
+exactly one const-decl site. The floors and the ignore list bind the
+constant corpus too (upstream's `_coincidence`): small ints (exit codes,
+pixel codes, cache versions) and ignored values are coincidence by
+doctrine — they neither collide in the regression rule nor seed the
+registry, and const-decl initializer hits pass through the same
+minValue/ignore guards as use-site literals (upstream's original
+const-decl bypass surfaced 3-file scatter groups for int 1/2 once the
+corpus stopped absorbing small values).
+
+*Pure alias*: a private `const` whose initializer is another constant's
+identifier — `const _appName = NAME;` — is flagged as adding a name
+without information; the message says to reference the shared constant
+directly (`alias \`_appName\` adds no information — reference \`NAME\`
+directly`). Public declarations are exempt (re-export shims are a
+deliberate API shape), computed initializers are not aliases, and the
+rule is switchable with `--aliases`/`--no-aliases` (default on).
 
 `--ignore VALUE` exempts a value permanently: strings by value, numbers
 by their decimal form — generic vocabulary whose extraction adds churn
@@ -630,21 +647,45 @@ not a folder). `--exclude GLOB` drops files from the count altogether;
 the default `src/` selection already excludes test files — the JS-side
 default for upstream's generated + `test/**` exclude globs (crap4js has
 no generated-code convention). Flags: `--min-files` (int ≥ 0, default
-3), `--min-length`, `--min-value`, repeatable `--ignore`/`--exclude`;
+3), `--min-length`, `--min-value`, repeatable `--ignore`/`--exclude`,
+`--aliases`/`--no-aliases` (upstream's `aliases` bool, default true);
 `--flag VALUE` and `--flag=VALUE` both accepted, any other argument is a
 path. Exit 2 iff violations exist; unknown flags (`--x=y`) and invalid
 numbers are usage errors (exit 1).
 
 Adaptation notes: upstream's config surface (`enabled`, `severity`,
 `ignorable`, `min_files`, `min_length`, `min_value`, `ignore`,
-`exclude`) becomes the flags above — crap4js has no config file; the
-gate is default-on as a subcommand. Upstream's `deep_search` option and
-the short-lived `scattered_fragments` gate were both removed again in
-the same upstream commit (v2) and were never ported. Dart
+`exclude`, `aliases`) becomes the flags above — crap4js has no config
+file; the gate is default-on as a subcommand. Upstream's `deep_search`
+option and the short-lived `scattered_fragments` gate were both removed
+again in the same upstream commit (v2) and were never ported. Dart
 adjacent-strings merging has no JS analog (no literal juxtaposition), so
-no merged-value handling exists. The port reuses `magic-constants`'
+no merged-value handling exists. The port reuses `magic-constants'`
 protocol-identifier and literal-kind helpers (the JS analog of
 upstream's shared literal_locations.dart extraction).
+
+Privacy: upstream flags library-private (`_`-prefixed) Dart constants;
+JS has no library privacy, so the port keeps the lexical `_`-prefix
+convention — `export const _x = kY` still flags (the underscore, not
+the export, is the signal), mirroring how the Dart analyzer treats
+library-private declarations regardless of export.
+
+Dogfood (upstream a314b485, warnings 62 → 0): this repo runs the gate
+on its own `src/`. The upgraded gate went from 124 warnings on the
+pre-port tree (45 regressions + 79 scattered) to 1 documented residue:
+shared vocabulary — AST node names (`complexity.js`), source/TS/runnable
+extension sets (`files.js`), and CLI/config spellings (`constants.js`:
+`test`, `--test`, `--threshold`, `coverage`, the default coverage path,
+`exclude`, `ignore`, `string`, the 1000 unit scale) — got one home per
+spelling and is referenced at every use site; the mutant verdicts moved
+next to the cache that persists them. The residue: mutation's
+`DEFAULT_MAX_MUTANTS = 500` coincides with memory's
+`DEFAULT_BADGE_THRESHOLD = 500` while naming two different facts (max
+mutants per run vs badge churn threshold) — upstream exempts such
+coincidences via its `ignore` config; crap4js has none, so the code
+comment at the site carries the documentation. The mutator's
+`test/src/<base>.test.js` candidate spellings survive as interpolated
+templates (not counted).
 
 ### duplicates
 

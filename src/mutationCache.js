@@ -9,11 +9,19 @@
 // file, or version change wipes the cache into a full re-execution.
 
 import { UTF8 } from './files.js';
+import { STRING } from './constants.js';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 
 // Written under the scanned project root.
 export const MUTATION_CACHE_FILE_NAME = '.crap-mutation-cache.json';
+
+// Mutant verdicts persisted with every cached outcome (`killed`,
+// `survived` or `timeout`): non-zero test exit kills (module-load failures
+// included), a clean pass survives, a timeout survives.
+export const KILLED = 'killed';
+export const SURVIVED = 'survived';
+export const TIMEOUT = 'timeout';
 
 // Cache envelope version; a mismatch discards the file.
 export const MUTATION_CACHE_VERSION = 1;
@@ -84,7 +92,7 @@ export class MutationCache {
     const method = this.methods[ref.key];
     if (!method || method.digest !== ref.digest) return null;
     return method.outcomes.find((o) =>
-      o.status === 'killed' &&
+      o.status === KILLED &&
       o.offset === site.offset - ref.start &&
       o.category === site.category &&
       o.original === site.original &&
@@ -136,7 +144,7 @@ function readMethods(raw) {
   if (!raw || typeof raw !== 'object') return {};
   return Object.fromEntries(
     Object.entries(raw)
-      .filter(([key, value]) => typeof key === 'string' && value && typeof value === 'object')
+      .filter(([key, value]) => typeof key === STRING && value && typeof value === 'object')
       .map(([key, value]) => [key, readMethod(value)]),
   );
 }
@@ -146,7 +154,7 @@ function readMethods(raw) {
 // never replayed by replayKill.
 function readMethod(value) {
   return {
-    digest: typeof value.digest === 'string' ? value.digest : '',
+    digest: typeof value.digest === STRING ? value.digest : '',
     outcomes: Array.isArray(value.outcomes) ? value.outcomes : [],
   };
 }

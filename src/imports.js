@@ -3,11 +3,16 @@
 
 import { statSync } from 'node:fs';
 import path from 'node:path';
-import { childrenOf, isNode } from './complexity.js';
-import { toRelPath } from './files.js';
-
-// Extensions tried when resolving an extensionless relative specifier.
-const SOURCE_EXTS = ['.js', '.mjs', '.cjs', '.jsx', '.ts', '.tsx'];
+import {
+  CALL,
+  EXPORT_NAMED_DECLARATION,
+  IDENT,
+  IMPORT_DECLARATION,
+  STRING_LITERAL,
+  childrenOf,
+  isNode,
+} from './complexity.js';
+import { SOURCE_EXTENSIONS, toRelPath } from './files.js';
 
 /**
  * All import/require specifiers of a parsed program: static imports,
@@ -31,9 +36,9 @@ export function collectImports(program) {
 
 // Static import/export forms: the specifier lives in node.source.
 const SOURCE_FORMS = new Set([
-  'ImportDeclaration',
+  IMPORT_DECLARATION,
   'ExportAllDeclaration',
-  'ExportNamedDeclaration',
+  EXPORT_NAMED_DECLARATION,
 ]);
 
 // The specifier a node carries, or null when the node is not an import.
@@ -41,13 +46,13 @@ function importSpecifierOf(n) {
   // Babel 8 parses dynamic import() as ImportExpression; older parsers
   // produce a CallExpression with an Import/require callee.
   if (n.type === 'ImportExpression') return literalValue(n.source);
-  if (n.type === 'CallExpression') return literalArg(n);
+  if (n.type === CALL) return literalArg(n);
   if (SOURCE_FORMS.has(n.type)) return n.source?.value ?? null;
   return null;
 }
 
 function isRequireLike(callee) {
-  return callee.type === 'Import' || (callee.type === 'Identifier' && callee.name === 'require');
+  return callee.type === 'Import' || (callee.type === IDENT && callee.name === 'require');
 }
 
 function literalArg(call) {
@@ -55,7 +60,7 @@ function literalArg(call) {
 }
 
 function literalValue(node) {
-  return node?.type === 'StringLiteral' ? node.value : null;
+  return node?.type === STRING_LITERAL ? node.value : null;
 }
 
 /**
@@ -78,7 +83,7 @@ export function resolveImport(specifier, importerFile, projectRoot) {
 }
 
 function withExts(p) {
-  return SOURCE_EXTS.map((e) => p + e);
+  return SOURCE_EXTENSIONS.map((e) => p + e);
 }
 
 // The exact-path candidate may hit a directory (e.g. `./lib`); only a

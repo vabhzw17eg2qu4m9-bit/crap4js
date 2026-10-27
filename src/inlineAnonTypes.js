@@ -26,6 +26,13 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { UTF8, gateFiles, toRelPath } from './files.js';
 import { applyGateArg, runCheck } from './gateCommon.js';
+import {
+  ARROW_FUNCTION_EXPRESSION,
+  CLASS_METHOD,
+  CLASS_PRIVATE_METHOD,
+  FUNCTION_DECLARATION,
+  FUNCTION_EXPRESSION,
+} from './complexity.js';
 import { childrenOf, isNode, parseSource } from './complexity.js';
 
 const MAX_FIELDS = 5;
@@ -41,11 +48,11 @@ const ANON_SHAPE_TYPES = new Set([
 // Function-like declarations whose parameter/return annotations form a
 // signature (TSDeclareFunction = bodyless overload declaration).
 const SIGNATURE_TYPES = new Set([
-  'FunctionDeclaration',
-  'FunctionExpression',
-  'ArrowFunctionExpression',
-  'ClassMethod',
-  'ClassPrivateMethod',
+  FUNCTION_DECLARATION,
+  FUNCTION_EXPRESSION,
+  ARROW_FUNCTION_EXPRESSION,
+  CLASS_METHOD,
+  CLASS_PRIVATE_METHOD,
   'ObjectMethod',
   'TSDeclareFunction',
 ]);
