@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.24.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.23.0...v0.24.0) (2026-10-27)
+
+
+### Features
+
+* **gate:** ignore markers — blanket legacy + granular per-gate ([#67](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/67)) ([9e3eeeb](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/9e3eeebbd54c68b6616064545246c353f1bfe28a))
+
 ## [0.23.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.22.0...v0.23.0) (2026-10-27)
 
 
