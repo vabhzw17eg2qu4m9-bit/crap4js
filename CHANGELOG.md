@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.23.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.22.0...v0.23.0) (2026-10-27)
+
+
+### Features
+
+* **gate:** scattered-constants corpus guards + aliases rule + dogfood dedup (adapted from upstream a314b485) ([#65](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/65)) ([3c34c61](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/3c34c617214287fcfe0ff3c62c2826027c8b82c8))
+
 ## [0.22.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.21.0...v0.22.0) (2026-10-26)
 
 
