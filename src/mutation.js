@@ -52,8 +52,8 @@ const DEFAULT_TIMEOUT_SECONDS = 60;
 // 500 coincides with memory's DEFAULT_BADGE_THRESHOLD — different facts
 // (max mutants per run vs badge churn threshold): the documented residue
 // of the scattered-constants dogfood (upstream exempts such coincidences
-// via its `ignore` config; crap4js has no config file).
-const DEFAULT_MAX_MUTANTS = 500;
+// via its `ignore` config; here the granular marker below silences it).
+const DEFAULT_MAX_MUTANTS = 500; // ignore:scattered-constants
 // The per-mutant suite invocation (`node <testArgs...>`), the analog of
 // upstream's `test_args` default `['test']` for `dart test`.
 const DEFAULT_TEST_ARGS = [TEST_FLAG];
@@ -815,6 +815,7 @@ export function runMutation(argv, ctx) {
     files,
     (fs, root) => mutationViolations(fs, root, opts),
     mutationSummary,
+    'mutation',
   );
 }
 

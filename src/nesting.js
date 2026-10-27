@@ -97,5 +97,5 @@ export function nestingSummary({ violations, checked }) {
  * The `nesting` command body. Returns exit code 2 iff violations exist.
  */
 export function runNesting(paths, ctx) {
-  return runCheck(ctx, gateFiles(paths, ctx.cwd), nestingViolations, nestingSummary);
+  return runCheck(ctx, gateFiles(paths, ctx.cwd), nestingViolations, nestingSummary, 'nesting');
 }

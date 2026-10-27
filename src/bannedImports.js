@@ -156,5 +156,5 @@ export function runBannedImports(argv, ctx) {
     ...bannedImportViolations(files, root, rules),
     ruleCount: rules.length,
   });
-  return runCheck(ctx, gateFiles(paths, ctx.cwd), check, bannedSummary);
+  return runCheck(ctx, gateFiles(paths, ctx.cwd), check, bannedSummary, 'banned-imports');
 }

@@ -5,6 +5,7 @@
 
 import path from 'node:path';
 import { UTF8, gateFiles, toRelPath } from './files.js';
+import { filterIgnored } from './ignoreFilter.js';
 
 // Lower-cased generic stems with no domain meaning. Files with these names
 // accumulate unrelated declarations over time.
@@ -93,7 +94,8 @@ export function runFileNaming(paths, ctx) {
     ctx.out.write('No source files to check.\n');
     return 0;
   }
-  const result = namingViolations(files, ctx.cwd);
+  // File-level violations (no line): only file-scoped markers suppress.
+  const result = filterIgnored(namingViolations(files, ctx.cwd), 'file-naming', ctx.cwd);
   for (const v of result.violations) {
     ctx.out.write(`${v.file}: ${v.message}\n`);
   }

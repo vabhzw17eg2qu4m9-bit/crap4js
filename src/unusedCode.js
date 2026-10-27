@@ -103,5 +103,5 @@ export function unusedCodeSummary({ violations, checked }) {
  */
 export function runUnusedCode(paths, ctx) {
   if (paths.length > 0) return skipPartialSelection(ctx);
-  return runCheck(ctx, gateFiles([], ctx.cwd), unusedCodeViolations, unusedCodeSummary);
+  return runCheck(ctx, gateFiles([], ctx.cwd), unusedCodeViolations, unusedCodeSummary, 'unused-code');
 }

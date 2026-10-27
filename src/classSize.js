@@ -104,5 +104,5 @@ export function classSizeSummary({ violations, checked }) {
  * The `class-size` command body. Returns exit code 2 iff violations exist.
  */
 export function runClassSize(paths, ctx) {
-  return runCheck(ctx, gateFiles(paths, ctx.cwd), classSizeViolations, classSizeSummary);
+  return runCheck(ctx, gateFiles(paths, ctx.cwd), classSizeViolations, classSizeSummary, 'class-size');
 }

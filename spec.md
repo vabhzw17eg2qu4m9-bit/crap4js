@@ -485,10 +485,60 @@ output contract: one `file[:line]: message` line per violation, then a
 one-line summary; exit codes `0` pass, `1` usage error, `2` violations.
 
 Upstream 0.5.0 gate-framework features that have no crap4js equivalent
-and are intentionally NOT ported: `severity`/`ignorable`
-(`crap:ignore` suppression comments), per-gate `entries` threshold
+and are intentionally NOT ported: `severity` (warning downgrade),
+per-gate `entries` threshold
 overrides, and the violation `baseline` (`--save-baseline`/`--baseline`)
 mechanism. crap4js has no YAML config, so gate options are CLI flags.
+The ignore-comment suppression system IS ported (crap4dart 8abb64c,
+`ignore_filter.dart`) with its per-gate `ignorable` opt-in hard-coded —
+crap4js has no config file, so the ignorable set is a registry
+(`IGNORABLE_GATES` in `src/ignoreFilter.js`), not a config flag.
+
+### Ignore comments (crap4dart 8abb64c)
+
+The gate subcommands drop violations suppressed by ignore comments
+before output and exit-code aggregation, applied at the shared
+violation path (`runCheck`, plus `file-naming`'s inline body).
+Suppression applies only to gates in the ignorable registry — upstream's
+`ignorable: true` config opt-in; a non-ignorable gate is never
+suppressed, and unreadable files are never ignored.
+
+Markers (`//` comments only — the JS host adaptation; block comments
+are out of scope):
+
+- `// crap:ignore` — legacy blanket: suppresses every ignorable gate on
+  the violation line or the line above.
+- `// crap:ignore-file` — legacy blanket, file scope: anywhere in the
+  first 5 lines suppresses every ignorable gate's violations in the file.
+- `// ignore:<gate-id>` — granular, line scope, one gate id per marker:
+  suppresses only that gate on the violation line (trailing marker) or
+  the line above. A run of stacked whole-line markers directly above the
+  code line all apply; the walk stops at the first non-marker line.
+- `// ignore-file:<gate-id>` — granular, file scope: within the first
+  5 lines it suppresses only that gate file-wide.
+
+Grammar: one id per marker, ending at the next whitespace or `/`
+(regex `\/\/\s*ignore:([^\s/]*)`, `\/\/\s*ignore-file:([^\s/]*)`).
+Several markers on one line union their ids; an empty id (`// ignore:`)
+suppresses every ignorable gate, matching the legacy scope. An id never
+matches a rule it does not name — unknown ids and comma-lists
+(`// ignore:a,b` carries the single id `a,b`) are silently inert. Gate
+ids are the crap4js subcommand names.
+
+Ignorable mapping (upstream family → crap4js gate):
+
+| crap4js gates | markers honored | upstream families |
+|---|---|---|
+| `banned-imports`, `class-size`, `duplicates`, `inline-anon-types`, `magic-constants`, `nesting`, `scattered-constants`, `test-assertions`, `unused-code`, `weight-of-class` | line + file | `banned_imports`, `class_size`, `duplication`, `inline_record_types`+`record_size`, `magic_constants`, `nesting`, `scattered_constants`, `test_assertions`, `unused_code`, `weight_of_class` |
+| `file-naming`, `unused-files` | file only (violations have no line) | `file_naming`, `unused_files` |
+| `folder-structure` | none — violations name directories, which no comment addresses | `folder_structure` |
+| `mutation` | none — its summary carries the pre-aggregated score, which would desync from the filtered violation list | `mutation` |
+| `profile`, `memory`, `similarity`, `skill`, analyze | none — informational, not gates | — |
+
+Upstream gate families with no crap4js counterpart (`loc`,
+`test_coverage`, `complexity`, `method_size`, `record_named_fields`,
+`public_docs`, `hardcoded_strings`, `accessibility`, `golden`,
+`broken_goldens`, `external`) are simply not ignorable here.
 
 ### nesting
 

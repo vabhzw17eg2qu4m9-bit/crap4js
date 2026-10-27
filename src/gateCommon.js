@@ -3,6 +3,8 @@
 // from crap4dart 0.5.x gates: print one line per violation plus a summary;
 // exit code 2 iff violations exist.
 
+import { filterIgnored } from './ignoreFilter.js';
+
 // Whole-project checks (unused-code, unused-files) cannot run on an
 // explicit path selection — a partial file set yields false positives
 // (crap4dart 0.5.1 behavior).
@@ -68,14 +70,17 @@ function toGateNumber(head, value) {
  * @param {Function} findViolations  (files, projectRoot) =>
  *   { violations: Array<{file, line?, message}>, checked: number }.
  * @param {Function} summary  ({ violations, checked }) => string.
+ * @param {string} [gateId]  the gate subcommand's id (`nesting`, ...) —
+ *   when given, ignore-comment suppression applies per IGNORABLE_GATES
+ *   (see ignoreFilter.js) before printing and exit-code aggregation.
  * @returns {number} exit code — 2 iff violations exist.
  */
-export function runCheck(ctx, files, findViolations, summary) {
+export function runCheck(ctx, files, findViolations, summary, gateId = null) {
   if (files.length === 0) {
     ctx.out.write('No source files to check.\n');
     return 0;
   }
-  const result = findViolations(files, ctx.cwd);
+  const result = filterIgnored(findViolations(files, ctx.cwd), gateId, ctx.cwd);
   for (const v of result.violations) {
     ctx.out.write(`${v.file}${v.line ? `:${v.line}` : ''}: ${v.message}\n`);
   }

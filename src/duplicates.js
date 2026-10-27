@@ -116,6 +116,7 @@ export function runDuplicates(argv, ctx) {
     files,
     (fs, root) => duplicatesViolations(fs, root, opts),
     (result) => duplicatesSummary(result, opts),
+    'duplicates',
   );
 }
 
