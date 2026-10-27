@@ -120,6 +120,9 @@ crap4js memory [--top N] [--format console|json] [--badge PATH]
                           Run the test suite under node --trace-gc and
                           report per-test allocation churn and heap
                           growth (informational — always exits 0).
+crap4js reorder [--dry-run] [paths...]
+                         Rewrite class members into the canonical order
+                         (deterministic; same-kind order kept).
 crap4js skill            Print the crap4js profiling skill for AI agents.
 ```
 
@@ -749,6 +752,63 @@ The repo's own md corpus measures clean at the dogfood thresholds
 `crap4js skill` prints a JavaScript-adapted profiling skill for AI agents
 (when to profile, how the instrumentation works, how to read the report)
 plus one line on installing it as an agent skill. Exits 0.
+
+## `reorder`
+
+`crap4js reorder [--dry-run] [paths...]` (port of crap4dart 0.22.0's
+reorder command, upstream spec §11.24, commit 24a6f24f) rewrites class
+members into the canonical order. It is NOT a gate — a deterministic
+source transform with a formatter's contract: the same input always
+produces the same output, already-canonical files stay byte-identical,
+and reordering an already-reordered file changes nothing (idempotent).
+
+```
+crap4js reorder [--dry-run] [paths...]
+```
+
+Canonical order (the documented JS adaptation of the upstream Dart
+table — JS has no const-field kind, so static constants live with
+static fields):
+
+| # | category | members |
+|---|---|---|
+| 1 | static fields | `static x`, `static #x`, `static {}` blocks (constants too) |
+| 2 | instance fields | `x`, `#x`, `accessor x` |
+| 3 | constructor | `constructor()` |
+| 4 | static methods | public `static m() {}` |
+| 5 | getters/setters | `get`/`set` at any staticness, incl. `static get` and `#get` |
+| 6 | public methods | `m() {}` |
+| 7 | private methods | `#m() {}` at any staticness |
+
+Kind wins over staticness: a `static get g()` is an accessor (5), a
+`static #sp()` is a private method (7). This is a documented JS-only
+deviation: upstream FINAL's `_methodCategory` checks `isStatic` first
+(a Dart `static getter` lands in the static-methods bucket), and
+crap4py mirrors that staticness-first ladder; crap4js keeps every
+accessor — however qualified — in one run. Members of the same
+category keep their original relative order — a stable partition,
+never an alphabetical sort.
+
+Doc comments (`/** ... */` directly above a member) and whole-line
+`//` comment blocks move with their member — including a block
+separated from the member by a single blank line; two or more blank
+lines detach it. A detached block stays in the file and travels with
+the member it precedes; comments are never dropped. A comment that
+looks like code (`// fake() {}`) is carried, not parsed. Members on
+the class header line keep the header (`class A { // note` survives),
+and comments between the last member and the closing brace stay put.
+Only top-level class declarations are reordered — `export class` and
+`export default class` included; class expressions and nested classes
+are left untouched, as are TS enums and object literals (member order
+is semantics there).
+
+Line-ending style (LF or CRLF) is preserved, and so is a missing
+trailing newline. With `--dry-run` nothing is written: the command
+lists the files that would change and exits 2 (exit 0 when everything
+is already canonical). Default: writes the files and exits 0. Default
+selection is the `src/` walk; explicit paths may be files or
+directories (any source extension). Files that fail to parse are
+skipped with a note — never fatal.
 
 ## Ignore comments
 

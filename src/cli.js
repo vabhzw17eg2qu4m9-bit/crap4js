@@ -49,13 +49,17 @@
 //                            Flag directories holding more than their cap
 //                            of loose (direct) source files; --cap gives
 //                            per-pattern caps (first pattern wins)
+//   crap4js mutation [...]  Mutation-test one operator/literal at a time.
+//   crap4js reorder [--dry-run] [paths...]
+//                            Rewrite class members into the canonical
+//                            order (deterministic; same-kind order kept).
 //   crap4js skill            Print the crap4js profiling skill for AI agents.
 //
 // The first argument selects a subcommand when it is exactly `profile`,
 // `file-naming`, `nesting`, `class-size`, `weight-of-class`, `unused-code`,
 // `unused-files`, `banned-imports`, `magic-constants`, `scattered-constants`,
 // `duplicates`, `similarity`, `test-assertions`, `inline-anon-types`,
-// `folder-structure`, `mutation`, `memory`, or `skill`;
+// `folder-structure`, `mutation`, `reorder`, `memory`, or `skill`;
 // anything else is analyzed as before.
 //
 // Exit codes: 0 success; 1 usage error; 2 CRAP/profile threshold exceeded
@@ -81,6 +85,7 @@ import { runTestAssertions } from './testAssertions.js';
 import { runInlineAnonTypes } from './inlineAnonTypes.js';
 import { runFolderStructure } from './folderStructure.js';
 import { runMutation } from './mutation.js';
+import { runReorder } from './reorder.js';
 import { parseProfileArgs, runProfile } from './profile.js';
 import { runMemory } from './memory.js';
 import { runSkill } from './skill.js';
@@ -169,6 +174,14 @@ function usage() {
     "                           file's derived test files (scoped kills cache",
     '                           as kills; survivors are re-confirmed against',
     '                           the full suite)',
+    '  crap4js reorder [--dry-run] [paths...]',
+    '                           Rewrite class members into the canonical',
+    '                           order (static fields, instance fields,',
+    '                           constructor, static methods, getters/',
+    '                           setters, public methods, private #methods;',
+    '                           same-kind order kept). Comments above a',
+    '                           member move with it. --dry-run lists the',
+    '                           files that would change and exits 2.',
     '  crap4js memory [--top N] [--format console|json] [--badge PATH]',
     '                  [--badge-threshold MB] [paths...]',
     '                           Run the test suite under node --trace-gc (one',
@@ -200,6 +213,7 @@ const SUBCOMMANDS = {
   'inline-anon-types': (args, ctx) => runInlineAnonTypes(args, ctx),
   'folder-structure': (args, ctx) => runFolderStructure(args, ctx),
   mutation: (args, ctx) => runMutation(args, ctx),
+  reorder: (args, ctx) => runReorder(args, ctx),
   memory: (args, ctx) => runMemory(args, ctx),
   skill: (_args, ctx) => runSkill(ctx),
 };
