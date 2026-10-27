@@ -83,6 +83,21 @@ export class MutationCache {
     this.methods = methods;
   }
 
+  // A missing, corrupt, outdated or meta-mismatched file yields an empty
+  // cache — a full re-execution under the current semantics.
+  static load(path, meta) {
+    if (!existsSync(path)) return new MutationCache(meta);
+    try {
+      const decoded = JSON.parse(readFileSync(path, UTF8));
+      if (decoded?.version !== MUTATION_CACHE_VERSION) return new MutationCache(meta);
+      if (!metaMatches(decoded.meta ?? {}, meta)) return new MutationCache(meta);
+      return new MutationCache(meta, readMethods(decoded.methods));
+    } catch {
+      // SyntaxError from JSON.parse — a corrupt file means full re-execution.
+      return new MutationCache(meta);
+    }
+  }
+
   // Returns the cached `killed` outcome matching `site` when the stored
   // digest equals `ref.digest`; null means the mutant must be executed
   // (changed method, unknown site, or a survivor). Stored offsets are
@@ -122,21 +137,6 @@ export class MutationCache {
 
   save(path) {
     writeFileSync(path, `${JSON.stringify(this.envelope(), null, 2)}\n`);
-  }
-
-  // A missing, corrupt, outdated or meta-mismatched file yields an empty
-  // cache — a full re-execution under the current semantics.
-  static load(path, meta) {
-    if (!existsSync(path)) return new MutationCache(meta);
-    try {
-      const decoded = JSON.parse(readFileSync(path, UTF8));
-      if (decoded?.version !== MUTATION_CACHE_VERSION) return new MutationCache(meta);
-      if (!metaMatches(decoded.meta ?? {}, meta)) return new MutationCache(meta);
-      return new MutationCache(meta, readMethods(decoded.methods));
-    } catch {
-      // SyntaxError from JSON.parse — a corrupt file means full re-execution.
-      return new MutationCache(meta);
-    }
   }
 }
 

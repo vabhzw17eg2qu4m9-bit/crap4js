@@ -83,6 +83,9 @@ crap4js mutation [--min-score N] [--max-survivors N]
                  Mutate one operator/literal at a time and re-run the
                  test suite per mutant; covered sites only, survivors
                  flagged.
+crap4js reorder [--dry-run] [paths...]
+                 Rewrite class members into the canonical order
+                 (deterministic source transform, not a gate).
 crap4js skill            Print the crap4js profiling skill for AI agents.
 ```
 
@@ -90,7 +93,7 @@ The first argument selects a subcommand when it is exactly `profile`,
 `file-naming`, `nesting`, `class-size`, `weight-of-class`, `unused-code`,
 `unused-files`, `banned-imports`, `magic-constants`, `scattered-constants`,
 `duplicates`, `test-assertions`,
-`inline-anon-types`, `folder-structure`, `mutation`, or `skill`; anything else (flags, paths)
+`inline-anon-types`, `folder-structure`, `mutation`, `reorder`, or `skill`; anything else (flags, paths)
 is analyzed as the CRAP command above. `--changed` is mutually exclusive
 with explicit paths. Unknown flags are a usage error (exit 1).
 
@@ -533,7 +536,7 @@ Ignorable mapping (upstream family → crap4js gate):
 | `file-naming`, `unused-files` | file only (violations have no line) | `file_naming`, `unused_files` |
 | `folder-structure` | none — violations name directories, which no comment addresses | `folder_structure` |
 | `mutation` | none — its summary carries the pre-aggregated score, which would desync from the filtered violation list | `mutation` |
-| `profile`, `memory`, `similarity`, `skill`, analyze | none — informational, not gates | — |
+| `profile`, `memory`, `similarity`, `skill`, `reorder`, analyze | none — informational or transform commands, not gates | — |
 
 Upstream gate families with no crap4js counterpart (`loc`,
 `test_coverage`, `complexity`, `method_size`, `record_named_fields`,
@@ -1163,6 +1166,56 @@ CHANGELOG) measures clean at jaccard 0.6 / containment 0.9 and still at
   at `process.on('exit')`, which covers the same short-run tail-loss risk.
   Ported instead: the 0.9.5 no-inflation guarantee — via per-pid output
   files (step 3 above) rather than upstream's delta-flush bookkeeping.
+
+## reorder
+
+Port of the crap4dart 0.22.0 reorder command (upstream spec §11.24,
+commit 24a6f24f), a command with a deterministic contract, not a gate:
+`reorder [--dry-run] [paths...]` rewrites class members into the
+canonical order. The same input always produces the same output,
+already-canonical files stay byte-identical (whatever their member
+layout — single-line bodies and members sharing the header line are
+preserved as written), and reordering an already-reordered file does
+not change it (idempotent).
+
+Canonical order — the JS adaptation of the upstream Dart table (JS has
+no const-field kind, so static constants live with static fields):
+static fields (`static x`, `static #x`, `static {}` blocks), instance
+fields (`x`, `#x`, `accessor x`), constructor, static methods
+(public), getters/setters (`get`/`set` at any staticness), public
+methods, private methods (`#m` at any staticness). Kind wins over
+staticness — a `static get g()` is an accessor, a `static #sp()` is a
+private method. This is a documented JS-only deviation: upstream FINAL
+buckets `isStatic` first (a Dart `static getter` lands under static
+methods) and crap4py mirrors that staticness-first ladder; crap4js
+keeps every accessor — however qualified — in one run. Members within
+one category keep their original relative
+order (a stable partition — the command never sorts alphabetically).
+
+Doc comments and whole-line `//` comment blocks above a member move
+with it — including a block separated from the member by a single
+blank line; two or more blank lines detach the block. A detached block
+stays in the file and travels with the member it precedes; comments
+are never dropped (a comment that looks like code, `// fake() {}`, is
+carried, not parsed). Members on the class header line keep the header
+(`class A { // trailing` survives intact), class docs above the opener
+are never stolen, and comments between the last member and the closing
+brace stay put. Only top-level class declarations are reordered —
+`export class` and `export default class` included; class expressions
+and nested classes are untouched, as are TS enums and object literals
+(member order is semantics there — the host analog of upstream's
+never-touch enum bodies). Dart-only member kinds with no JS analog
+(factory constructors, operators as a distinct kind) are omitted.
+
+A file's line-ending style (LF or CRLF) is preserved, as is a missing
+trailing newline. With `--dry-run` the command writes nothing, lists
+the files that would change and exits 2 (0 when everything is already
+canonical); by default it writes the files and exits 0. Default
+selection is the `src/` walk; explicit paths may be files or
+directories with any source extension. Files that fail to parse are
+skipped with a note — never fatal. Transform invariants (idempotence,
+token-multiset preservation, parseability) are verified on a fixture
+corpus and on real repository files.
 
 ## skill
 
