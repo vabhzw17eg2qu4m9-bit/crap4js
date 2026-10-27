@@ -118,5 +118,5 @@ export function weightSummary({ violations, checked }) {
  * exist.
  */
 export function runWeightOfClass(paths, ctx) {
-  return runCheck(ctx, gateFiles(paths, ctx.cwd), weightViolations, weightSummary);
+  return runCheck(ctx, gateFiles(paths, ctx.cwd), weightViolations, weightSummary, 'weight-of-class');
 }

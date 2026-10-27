@@ -342,5 +342,6 @@ export function runScatteredConstants(argv, ctx) {
     gateFiles(opts.paths, ctx.cwd),
     (fs, root) => scatteredConstantsViolations(fs, root, opts),
     scatteredConstantsSummary,
+    'scattered-constants',
   );
 }

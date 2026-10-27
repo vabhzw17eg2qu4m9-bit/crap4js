@@ -181,5 +181,6 @@ export function runTestAssertions(argv, ctx) {
     testFiles(argv, ctx.cwd),
     testAssertionViolations,
     testAssertionsSummary,
+    'test-assertions',
   );
 }

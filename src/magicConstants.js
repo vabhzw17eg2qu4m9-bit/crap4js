@@ -158,5 +158,6 @@ export function runMagicConstants(argv, ctx) {
     gateFiles(argv, ctx.cwd),
     magicConstantsViolations,
     magicConstantsSummary,
+    'magic-constants',
   );
 }

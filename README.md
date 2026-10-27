@@ -750,6 +750,45 @@ The repo's own md corpus measures clean at the dogfood thresholds
 (when to profile, how the instrumentation works, how to read the report)
 plus one line on installing it as an agent skill. Exits 0.
 
+## Ignore comments
+
+The gate subcommands honor ignore comments (port of crap4dart 8abb64c's
+`ignore_filter.dart`); suppressed violations are dropped before the
+output and the exit code. Suppression is per-gate opt-in: upstream
+configures it with `ignorable: true` per gate in YAML; crap4js has no
+config file, so the ignorable set is hard-coded — the
+violation-reporting gate subcommands, except `folder-structure` (its
+violations name directories, which no comment can address) and
+`mutation` (its summary carries the pre-aggregated score, which would
+desync from the filtered violation list). Markers never affect
+`profile`, `memory`, `similarity`, `skill`, or the default analyze run.
+
+Legacy blanket markers (upstream 0.5.0 semantics, unchanged):
+
+- `// crap:ignore` — suppresses every ignorable gate's violation on that
+  line or the line above.
+- `// crap:ignore-file` — same, file-wide; anywhere in the first 5 lines.
+
+Granular markers, Dart-lint style — one gate id per marker:
+
+- `// ignore:<gate-id>` — suppresses only that gate on that line (trailing)
+  or the line above. A run of stacked whole-line markers directly above the
+  code line all apply (the walk stops at the first non-marker line).
+- `// ignore-file:<gate-id>` — suppresses only that gate file-wide;
+  within the first 5 lines.
+
+`<gate-id>` is the subcommand name (`nesting`, `magic-constants`, ...) and
+ends at the next whitespace or `//`. Several markers on one line union;
+an empty id (`// ignore:`) suppresses every ignorable gate; unknown ids
+and comma lists (`// ignore:a,b` is the single id `a,b`) match nothing.
+
+```js
+const DEFAULT_MAX_MUTANTS = 500; // ignore:scattered-constants
+// ignore:magic-constants
+// ignore:unused-code
+const ACCENT = guessColor(); // both markers above apply to this line
+```
+
 ## Complexity rules
 
 Base value `1`, then `+1` for each occurrence of:

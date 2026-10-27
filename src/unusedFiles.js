@@ -52,5 +52,5 @@ export function unusedFilesSummary({ violations, checked }) {
  */
 export function runUnusedFiles(paths, ctx) {
   if (paths.length > 0) return skipPartialSelection(ctx);
-  return runCheck(ctx, gateFiles([], ctx.cwd), unusedFilesViolations, unusedFilesSummary);
+  return runCheck(ctx, gateFiles([], ctx.cwd), unusedFilesViolations, unusedFilesSummary, 'unused-files');
 }

@@ -194,5 +194,6 @@ export function runInlineAnonTypes(argv, ctx) {
     gateFiles(opts.paths, ctx.cwd),
     (fs, root) => inlineAnonTypesViolations(fs, root, opts),
     inlineAnonTypesSummary,
+    'inline-anon-types',
   );
 }
