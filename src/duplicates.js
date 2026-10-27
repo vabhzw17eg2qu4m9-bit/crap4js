@@ -33,22 +33,33 @@ import path from 'node:path';
 import { UTF8, expandPaths, gateFiles, isAnySourceFile, isTestPath, toRelPath } from './files.js';
 import { globToRegExp } from './bannedImports.js';
 import { parseTokenized, SKIP_KEYS, tokenizeSource } from './complexity.js';
+import { EXCLUDE, STRING, THRESHOLD_FLAG } from './constants.js';
+import {
+  ARROW_FUNCTION_EXPRESSION,
+  CALL,
+  CLASS_METHOD,
+  CLASS_PRIVATE_METHOD,
+  EXPORT_NAMED_DECLARATION,
+  FUNCTION_DECLARATION,
+  FUNCTION_EXPRESSION,
+  IDENT,
+  IMPORT_DECLARATION,
+} from './complexity.js';
 import { applyGateArg, runCheck } from './gateCommon.js';
 
 const DEFAULT_THRESHOLD = 1;
-const TYPE_STRING = 'string';
 const DEFAULT_MIN_TOKENS = 50;
 const DEFAULT_MIN_LINES = 5;
 
 const VALUE_FLAGS = {
-  '--threshold': 'threshold',
+  [THRESHOLD_FLAG]: 'threshold',
   '--min-tokens': 'minTokens',
   '--min-lines': 'minLines',
   '--report': 'report',
-  '--exclude': 'exclude',
+  '--exclude': EXCLUDE,
   '--source': 'source',
 };
-const NUMBER_FLAGS = new Set(['--threshold', '--min-tokens', '--min-lines']);
+const NUMBER_FLAGS = new Set([THRESHOLD_FLAG, '--min-tokens', '--min-lines']);
 // Violation styles (upstream `report: percentage|clones`): percentage is
 // the default, clones is the PMD CPD style - one violation per group.
 const REPORT_MODES = new Set(['percentage', 'clones']);
@@ -227,11 +238,11 @@ const TEMPLATE_TEXT_LABELS = new Set(['...${', '...`']);
 // constructor, or (arrow) function; nested functions share the outermost
 // scope — upstream's depth guard, no inner-scope shadow tracking.
 const SCOPE_TYPES = new Set([
-  'FunctionDeclaration',
-  'FunctionExpression',
-  'ArrowFunctionExpression',
-  'ClassMethod',
-  'ClassPrivateMethod',
+  FUNCTION_DECLARATION,
+  FUNCTION_EXPRESSION,
+  ARROW_FUNCTION_EXPRESSION,
+  CLASS_METHOD,
+  CLASS_PRIVATE_METHOD,
   'ObjectMethod',
 ]);
 
@@ -243,7 +254,7 @@ const TYPE_PARAM_TYPES = new Set(['TSTypeParameter', 'TypeParameter']);
 // values are nodes, skipping the meta keys babel attaches alongside the
 // tree (same exclusions as the complexity walker).
 function isNode(value) {
-  return value && typeof value.type === TYPE_STRING;
+  return value && typeof value.type === STRING;
 }
 
 function childNodes(node) {
@@ -295,13 +306,13 @@ function bindings(node, names) {
 // (`TypeParameter`) or an identifier node (`TSTypeParameter`).
 function addTypeParam(node, names) {
   const name = node.name?.name ?? node.name;
-  if (typeof name === TYPE_STRING) names.add(name);
+  if (typeof name === STRING) names.add(name);
 }
 
 // Parameter bindings for every function-flavoured node. The scope's own
 // name is API surface and stays unrenamed (root skipped, nested collected).
 function collectFunctionLocals(node, root, names) {
-  if (node.type === 'FunctionDeclaration' || node.type === 'FunctionExpression') {
+  if (node.type === FUNCTION_DECLARATION || node.type === FUNCTION_EXPRESSION) {
     if (node !== root && node.id) names.add(node.id.name);
   }
   for (const param of node.params) bindings(param, names);
@@ -378,7 +389,7 @@ function scopeAt(scopes, offset) {
 // Placeholder for a masked literal token, or undefined to keep the lexeme.
 function literalPlaceholder(token) {
   const label = token.type.label;
-  if (label === 'string' || TEMPLATE_TEXT_LABELS.has(label)) return '$STR';
+  if (label === STRING || TEMPLATE_TEXT_LABELS.has(label)) return '$STR';
   if (label === 'num' || label === 'bigint') return '$NUM';
   return undefined;
 }
@@ -420,7 +431,7 @@ function normalizedTokens(source, ext, opts) {
   const ranges = opts.ignoreImports ? importSkipRanges(program) : [];
   const normalized = [];
   for (const token of tokens) {
-    if (token.type.label === 'eof' || typeof token.type === TYPE_STRING) continue;
+    if (token.type.label === 'eof' || typeof token.type === STRING) continue;
     if (inRanges(ranges, token.start)) continue;
     const lexeme = source.slice(token.start, token.end);
     normalized.push({
@@ -445,7 +456,7 @@ function importSkipRanges(program) {
       ranges.push([node.start, node.end]);
       return;
     }
-    if (node.type === 'ExportNamedDeclaration') {
+    if (node.type === EXPORT_NAMED_DECLARATION) {
       // babel never attaches `source` when `declaration` is present (the
       // two are mutually exclusive), so a wrapping export has no trailing
       // from-clause to drop.
@@ -467,12 +478,12 @@ function importSkipRanges(program) {
 }
 
 // Pure directive statements (no wrapped code).
-const DIRECTIVE_TYPES = new Set(['ImportDeclaration', 'ExportAllDeclaration']);
+const DIRECTIVE_TYPES = new Set([IMPORT_DECLARATION, 'ExportAllDeclaration']);
 
 // Whether node is a CommonJS `require(...)` call.
 function isRequireCall(node) {
-  return node.type === 'CallExpression' &&
-    node.callee.type === 'Identifier' &&
+  return node.type === CALL &&
+    node.callee.type === IDENT &&
     node.callee.name === 'require';
 }
 

@@ -15,6 +15,12 @@
 //   --min-files (default 3) distinct files — one violation per occurrence,
 //   asking to extract a shared constant and verify all occurrences mean
 //   the same thing first (the same value is sometimes coincidence).
+// - pure alias: a PRIVATE const whose initializer is another constant's
+//   identifier — `const _x = kY;` — adds a name without information and
+//   is flagged on sight; reference the shared constant directly. Public
+//   declarations are exempt (re-export shims are deliberate API shape);
+//   computed initializers are not aliases; --no-aliases switches the
+//   rule off (upstream's `aliases` config key, default true).
 //
 // Values compare semantically: strings by value, numbers by numeric value
 // — digit separators (`86_400`) do not split a fact (magic-constants
@@ -25,22 +31,35 @@
 // everywhere), protocol positions (object keys, computed member indexes,
 // switch case labels — the same rule as magic-constants), import/export
 // source specifiers (the JS analog of upstream's directive URIs), and
-// values listed in --ignore. `--ignore` entries containing `/` are
-// file-path globs exempting whole files instead; --exclude GLOB drops
-// files from the count (upstream's generated + test/** defaults are
-// covered by the shared file selection, which already skips test paths).
+// values listed in --ignore. The floors and the ignore list bind the
+// constant corpus too: small ints (exit codes) and ignored values are
+// coincidence by doctrine and neither collide in the regression rule nor
+// seed the registry. `--ignore` entries containing `/` are file-path
+// globs exempting whole files instead; --exclude GLOB drops files from
+// the count (upstream's generated + test/** defaults are covered by the
+// shared file selection, which already skips test paths).
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { UTF8, gateFiles, toRelPath } from './files.js';
 import { globToRegExp } from './bannedImports.js';
 import { applyGateArg, runCheck } from './gateCommon.js';
+import { IDENT, NUMERIC_LITERAL } from './complexity.js';
 import { childrenOf, isNode, parseSource } from './complexity.js';
+import { EXCLUDE, IGNORE } from './constants.js';
 import { isIdentifierPosition, literalValue } from './magicConstants.js';
 
 const MIN_FILES = 3;
 const MIN_LENGTH = 4;
 const MIN_VALUE = 100;
+
+// Boolean switch pair (no value) → [opts key, value]: the pure-alias rule
+// is on by default; `--no-aliases` turns it off (upstream's `aliases`
+// config key), `--aliases` back on.
+const BOOL_FLAGS = {
+  '--aliases': ['aliases', true],
+  '--no-aliases': ['aliases', false],
+};
 
 // Import/export specifiers name a module — a structural reference, not a
 // fact (upstream exempts import/export/part/part-of URIs).
@@ -76,7 +95,7 @@ function partitionIgnore(entries) {
 function semanticLiteral(node) {
   const raw = literalValue(node);
   if (raw === undefined) return undefined;
-  if (node.type === 'NumericLiteral') {
+  if (node.type === NUMERIC_LITERAL) {
     return {
       key: `n:${node.value}`,
       numeric: true,
@@ -106,6 +125,17 @@ function visit(node, parent, file, state) {
   for (const child of childrenOf(node)) visit(child, node, file, state);
 }
 
+// A coincidental value never seeds the constant corpus: numbers of
+// magnitude at or below --min-value (exit codes 0/1/2 happen everywhere —
+// the same doctrine as the literal side) and values on the ignore list —
+// an ignored value cannot be the canonical twin that flags someone else.
+// Strings are not length-filtered here: a short string const is still a
+// named fact other files must reference (upstream's _coincidence).
+function isCoincidence(lit, state) {
+  if (lit.numeric && Math.abs(Number(lit.value)) <= state.minValue) return true;
+  return state.ignore.has(lit.value);
+}
+
 function collectConstDecls(node, file, state) {
   for (const d of node.declarations) {
     // Destructuring patterns (`const { retry = 3000 } = opts`) carry
@@ -114,15 +144,28 @@ function collectConstDecls(node, file, state) {
     // (magic-constants counts them the same way).
     visit(d.id, node, file, state);
     if (!d.init) continue;
+    // Pure value alias: the initializer is another constant's identifier —
+    // `const _x = kY;` adds a name without information. Public re-export
+    // shims are recorded too; only private (_-prefixed) ones flag.
+    if (d.init.type === IDENT && d.id.name) {
+      state.aliases.push({
+        name: d.id.name,
+        target: d.init.name,
+        file,
+        line: d.loc.start.line,
+      });
+    }
     const lit = semanticLiteral(d.init);
     if (!lit) {
       for (const child of childrenOf(d.init)) visit(child, d.init, file, state);
       continue;
     }
-    state.registry.set(lit.key, [
-      ...(state.registry.get(lit.key) ?? []),
-      { name: d.id?.name ?? '', file, line: d.loc.start.line },
-    ]);
+    if (!isCoincidence(lit, state)) {
+      state.registry.set(lit.key, [
+        ...(state.registry.get(lit.key) ?? []),
+        { name: d.id?.name ?? '', file, line: d.loc.start.line },
+      ]);
+    }
     addHit(state, file, lit, d.loc.start.line, true);
   }
 }
@@ -135,14 +178,14 @@ function recordLiteral(node, parent, file, state) {
   if (lit) addHit(state, file, lit, node.loc.start.line, false);
 }
 
-// One literal occurrence. Ordinary numeric hits respect the magnitude
-// floor and ignore list; const-declaration numeric hits bypass both
-// (upstream adds them unfiltered — a duplicate const declaration is a
-// regression even at a small value). String hits of both kinds respect
-// the length floor and the ignore list.
+// One literal occurrence. All hits — use-site literals and
+// const-declaration initializers alike — respect the magnitude/length
+// floors and the ignore list. (Upstream's const-decl initializer hits
+// originally bypassed both; the bypass surfaced 3-file scatter groups for
+// int 1/2 once the corpus stopped absorbing small values.)
 function addHit(state, file, lit, line, isConstDecl) {
   if (lit.numeric) {
-    if (!isConstDecl && (Math.abs(Number(lit.value)) <= state.minValue || state.ignore.has(lit.value))) return;
+    if (isCoincidence(lit, state)) return;
   } else if (lit.value.length < state.minLength || state.ignore.has(lit.value)) {
     return;
   }
@@ -158,9 +201,9 @@ function addHit(state, file, lit, line, isConstDecl) {
  *   excludes test files — upstream's test/** exclude default).
  * @param {string} projectRoot
  * @param {{minFiles?: number, minLength?: number, minValue?: number,
- *   ignore?: string[], exclude?: string[]}} [opts]
+ *   ignore?: string[], exclude?: string[], aliases?: boolean}} [opts]
  * @returns {{violations: Array<{file, line, message}>, checked: number,
- *   regressions: number}}
+ *   regressions: number, aliases: number}}
  */
 export function scatteredConstantsViolations(files, projectRoot, opts = {}) {
   const { values: ignoreValues, globs: ignoreGlobs } = partitionIgnore(opts.ignore ?? []);
@@ -172,6 +215,7 @@ export function scatteredConstantsViolations(files, projectRoot, opts = {}) {
     ignore: ignoreValues,
     registry: new Map(),
     literals: new Map(),
+    aliases: [],
   };
   let checked = 0;
   for (const file of files) {
@@ -188,7 +232,21 @@ export function scatteredConstantsViolations(files, projectRoot, opts = {}) {
     violations.push(...found.violations);
     regressions += found.regressions;
   }
-  return { violations, checked, regressions };
+  // Pure value aliases: a PRIVATE const whose initializer is another
+  // constant's identifier is flagged on sight — the name adds no
+  // information, reference the shared constant directly. Public
+  // declarations are exempt (re-export shims are deliberate API shape).
+  const aliasViolations = opts.aliases === false
+    ? []
+    : state.aliases
+        .filter((a) => a.name.startsWith('_'))
+        .map((a) => ({
+          file: a.file,
+          line: a.line,
+          message: `alias \`${a.name}\` adds no information — reference \`${a.target}\` directly`,
+        }));
+  violations.push(...aliasViolations);
+  return { violations, checked, regressions, aliases: aliasViolations.length };
 }
 
 // Violations for one literal value: constant regressions first (any
@@ -224,17 +282,18 @@ function violationsFor(lit, registry, minFiles) {
  * One-line summary mirroring the Dart gate: `N files scanned, no literals
  * repeat across files`, or the per-kind counts.
  */
-export function scatteredConstantsSummary({ violations, checked, regressions = 0 }) {
+export function scatteredConstantsSummary({ violations, checked, regressions = 0, aliases = 0 }) {
   return violations === 0
     ? `${checked} files scanned, no literals repeat across files`
-    : `${regressions} hardcoded re-uses of existing constants, ${violations - regressions} scattered-literal occurrences`;
+    : `${regressions} hardcoded re-uses of existing constants, ${violations - regressions - aliases} scattered-literal occurrences${aliases ? `, ${aliases} pure aliases` : ''}`;
 }
 
 /**
  * Parse `scattered-constants` arguments into `{ minFiles, minLength,
- * minValue, ignore, exclude, paths }`. `--flag VALUE` and `--flag=VALUE`
- * both accepted; `--ignore` and `--exclude` are repeatable; unknown flags
- * and invalid numbers are usage errors.
+ * minValue, ignore, exclude, aliases, paths }`. `--flag VALUE` and
+ * `--flag=VALUE` both accepted; `--ignore` and `--exclude` are repeatable;
+ * `--aliases`/`--no-aliases` toggle the pure-alias rule (default on);
+ * unknown flags and invalid numbers are usage errors.
  *
  * @param {string[]} argv
  */
@@ -245,9 +304,15 @@ export function parseScatteredConstantsArgs(argv) {
     minValue: MIN_VALUE,
     ignore: [],
     exclude: [],
+    aliases: true,
     paths: [],
   };
   for (let i = 0; i < argv.length; i++) {
+    const [key, value] = BOOL_FLAGS[argv[i]] ?? [];
+    if (value !== undefined) {
+      opts[key] = value;
+      continue;
+    }
     i = applyGateArg(
       opts,
       argv[i],
@@ -257,8 +322,8 @@ export function parseScatteredConstantsArgs(argv) {
         '--min-files': 'minFiles',
         '--min-length': 'minLength',
         '--min-value': 'minValue',
-        '--ignore': 'ignore',
-        '--exclude': 'exclude',
+        '--ignore': IGNORE,
+        '--exclude': EXCLUDE,
       },
       new Set(['--min-files', '--min-length', '--min-value']),
     );

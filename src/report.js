@@ -11,6 +11,8 @@
 // Sorting: numeric CRAP descending; null (N/A) entries last; ties broken by
 // (file asc, startLine asc). All-N/A report yields max 0.0 and a "passed" verdict.
 
+import { COGNITIVE } from './complexity.js';
+
 const W_METHOD = 30;
 const W_FILE = 35;
 const W_CC = 4;
@@ -34,7 +36,7 @@ export function formatReport(metrics, { threshold, parseFailures, metric } = {})
     ' ' +
     padRight('File', W_FILE) +
     ' ' +
-    padLeft(metric === 'cognitive' ? 'Cogn' : 'CC', W_CC) +
+    padLeft(metric === COGNITIVE ? 'Cogn' : 'CC', W_CC) +
     ' ' +
     padLeft('Cov%', W_COV) +
     ' ' +

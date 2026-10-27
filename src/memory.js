@@ -44,7 +44,7 @@
 //
 // Informational: always exits 0; usage errors exit 1.
 
-import { UTF8 } from './files.js';
+import { RUNNABLE_EXTENSIONS, UTF8 } from './files.js';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import {
@@ -58,16 +58,14 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { IGNORE, TEST, TEST_FLAG } from './constants.js';
 import { applyGateArg } from './gateCommon.js';
 import { badgeColorFor, renderBadgeSvg } from './badgeSvg.js';
 
 const DEFAULT_TOP = 20;
-const DEFAULT_SUITE_DIR = 'test';
-// The TAP `type:` diagnostic of a real test (describe blocks report
-// 'suite').
-const TEST_TYPE = 'test';
 const FORMATS = new Set(['console', 'json']);
-const TEST_EXTENSIONS = new Set(['.js', '.mjs', '.cjs']);
+// Test files are exactly the node-runnable JS extensions.
+const TEST_EXTENSIONS = new Set(RUNNABLE_EXTENSIONS);
 
 // One `node --trace-gc` row. When forwarded from the test child through
 // the runner's reporter stream it carries a `# ` TAP-comment prefix
@@ -148,7 +146,7 @@ export class TapSpans {
       this.pending = null;
       this.spans.push({
         name: p.name,
-        type: p.type || TEST_TYPE,
+        type: p.type || TEST,
         result: p.result,
         startMs: wallMs - p.durationMs,
         endMs: wallMs,
@@ -164,7 +162,7 @@ export class TapSpans {
     this.pending = null;
     this.spans.push({
       name: p.name,
-      type: p.type || TEST_TYPE,
+      type: p.type || TEST,
       result: p.result,
       startMs: p.lastWall,
       endMs: p.lastWall,
@@ -236,7 +234,7 @@ export function buildReport(runs, root) {
     tests.push(...entries);
   }
   return {
-    testCount: tests.filter((t) => t.type === TEST_TYPE).length,
+    testCount: tests.filter((t) => t.type === TEST).length,
     gcCount: allRows.length,
     totalChurnMb: round1(allRows.reduce((n, gc) => n + reclaimedMb(gc), 0)),
     // The allocated-volume headline of upstream b7c227d: on the Dart
@@ -337,8 +335,8 @@ function profileFile(file, cwd, execPath) {
     const { NODE_TEST_CONTEXT: _omit, ...env } = process.env;
     const child = spawn(
       execPath,
-      ['--trace-gc', '--test', '--test-reporter=tap', file],
-      { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] },
+      ['--trace-gc', TEST_FLAG, '--test-reporter=tap', file],
+      { cwd, env, stdio: [IGNORE, 'pipe', 'pipe'] },
     );
     const gcs = [];
     const tap = new TapSpans();
@@ -406,7 +404,7 @@ export function profileFilesSync(files, cwd) {
           CRAP_MEMORY_CWD: cwd,
           CRAP_MEMORY_OUT: out,
         },
-        stdio: ['ignore', 'ignore', 'inherit'],
+        stdio: [IGNORE, IGNORE, 'inherit'],
       },
     );
     if (r.status !== 0 || !readFileSyncSafe(out)) {
@@ -516,7 +514,7 @@ export function parseMemoryArgs(argv) {
 export function runMemory(argv, ctx) {
   const opts = parseMemoryArgs(argv);
   const files = collectTestFiles(
-    opts.paths.length ? opts.paths : [DEFAULT_SUITE_DIR],
+    opts.paths.length ? opts.paths : [TEST],
     ctx.cwd,
   );
   if (files.length === 0) {

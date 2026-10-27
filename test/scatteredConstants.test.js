@@ -10,6 +10,7 @@ import {
   scatteredConstantsViolations,
   runScatteredConstants,
 } from '../src/scatteredConstants.js';
+import { parseMutationArgs } from '../src/mutation.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -115,6 +116,7 @@ test('min_files is configurable, VALUE and =VALUE forms', () => {
     minValue: 100,
     ignore: [],
     exclude: [],
+    aliases: true,
     paths: [],
   });
 });
@@ -455,4 +457,113 @@ test('command body: exit 2 with violations, 0 clean, invalid number exits 1', ()
       );
     },
   );
+});
+
+// Killing test (upstream gate fix 1): small-int constants are coincidence
+// by doctrine — exit codes 0/1/2 must not collide in the regression rule.
+// With the corpus filter reverted, a.js's const seeds the registry and the
+// other files' const-decl hits regress against it.
+test('small-int constants in multiple files do not collide', () => {
+  const src = 'const EXIT_OK = 1;\n';
+  const r = scan({ 'a.js': src, 'b.js': src, 'c.js': src }, ['a.js', 'b.js', 'c.js']);
+  assert.equal(r.violations.length, 0);
+});
+
+// Killing test (upstream gate fix 1): an ignored value must not seed the
+// corpus either — an ignored value cannot be the twin that flags someone.
+test('an ignored const value does not register as the canonical twin', () => {
+  const r = scan(
+    {
+      'consts.js': 'const TIMEOUT_MS = 86400;\n',
+      'other.js': 'let x = 86400;\n',
+    },
+    ['consts.js', 'other.js'],
+    { ignore: ['86400'] },
+  );
+  assert.equal(r.violations.length, 0);
+});
+
+// Killing test (upstream gate fix 2): const-decl initializer hits go
+// through the same minValue/ignore guards as use-site literals. With the
+// old isConstDecl bypass restored, the three declarations surface as a
+// 3-file scatter group for int 2 once the corpus stops absorbing it.
+test('const-decl initializers respect minValue: below quiet, over flags', () => {
+  const small = 'const PIXEL_CODE = 2;\n';
+  const quiet = scan(
+    { 'a.js': small, 'b.js': small, 'c.js': small },
+    ['a.js', 'b.js', 'c.js'],
+  );
+  assert.equal(quiet.violations.length, 0);
+  // Over the threshold the guards pass and const-decl hits still count:
+  // three files declaring their own const with the same big value — the
+  // first declaration wins, the other two regress against it.
+  const big = 'const TIMEOUT_MS = 86400;\n';
+  const r = scan({ 'a.js': big, 'b.js': big, 'c.js': big }, ['a.js', 'b.js', 'c.js']);
+  assert.equal(r.violations.length, 2);
+  for (const v of r.violations) assert.match(v.message, /duplicates constant `TIMEOUT_MS`/);
+  assert.match(
+    scatteredConstantsSummary({ ...r, violations: r.violations.length }),
+    /2 hardcoded re-uses of existing constants, 0 scattered-literal/,
+  );
+});
+
+// Killing tests (upstream's aliases rule).
+test('a private pure value alias is flagged', () => {
+  const r = scan(
+    {
+      'a.js': "const NAME = 'shared-app-name';\nconst _appName = NAME;\nvoid _appName;\n",
+    },
+    ['a.js'],
+  );
+  assert.equal(r.violations.length, 1);
+  assert.equal(r.violations[0].line, 2);
+  assert.match(r.violations[0].message, /alias `_appName` adds no information/);
+  assert.match(r.violations[0].message, /reference `NAME` directly/);
+  assert.match(scatteredConstantsSummary({ ...r, violations: r.violations.length }), /1 pure aliases/);
+});
+
+test('a public alias is exempt (re-export shims are deliberate)', () => {
+  const r = scan(
+    {
+      'a.js': "const NAME = 'shared-app-name';\nconst appName = NAME;\nvoid appName;\n",
+    },
+    ['a.js'],
+  );
+  assert.equal(r.violations.length, 0);
+});
+
+test('no-aliases disables the rule, aliases turns it back on', () => {
+  const files = {
+    'a.js': "const NAME = 'shared-app-name';\nconst _appName = NAME;\nvoid _appName;\n",
+  };
+  assert.equal(scan(files, ['a.js'], { aliases: false }).violations.length, 0);
+  assert.equal(
+    parseScatteredConstantsArgs(['--no-aliases']).aliases,
+    false,
+  );
+  assert.equal(
+    parseScatteredConstantsArgs(['--no-aliases', '--aliases']).aliases,
+    true,
+  );
+  assert.equal(scan(files, ['a.js']).violations.length, 1);
+});
+
+test('computed initializers are not aliases', () => {
+  const r = scan(
+    {
+      'a.js': "const NAME = 'shared-app-name';\nconst app = NAME + '!';\nvoid app;\nconst t = `x`;\nvoid t;\n",
+    },
+    ['a.js'],
+  );
+  assert.equal(r.violations.length, 0);
+});
+
+test('the default is on, and other gates reject the flag (strict)', () => {
+  assert.equal(parseScatteredConstantsArgs([]).aliases, true);
+  // upstream's loader-strict test: `aliases` is scattered-constants
+  // vocabulary — any other gate's parser rejects it as unknown (the
+  // `--flag=VALUE` form is where unknown flags surface as usage errors).
+  assert.throws(() => parseMutationArgs(['--no-aliases=x']), /unknown flag: --no-aliases/);
+  // and a typo'd flag under this gate is a usage error too.
+  assert.throws(() => parseScatteredConstantsArgs(['--alias=x']), /unknown flag: --alias/);
 });

@@ -70,10 +70,12 @@ crap4js magic-constants [paths...]
                          Flag hex colors outside constants and literals
                          repeated 3+ times in one file.
 crap4js scattered-constants [--min-files N] [--min-length N] [--min-value N]
-                         [--ignore VALUE]... [--exclude GLOB]... [paths...]
+                         [--ignore VALUE]... [--exclude GLOB]...
+                         [--aliases|--no-aliases] [paths...]
                          Flag literals whose value repeats across distinct
                          files; existing const declarations regress
-                         immediately.
+                         immediately, private `const _x = kY;` pure aliases
+                         always.
 crap4js duplicates [--threshold N] [--min-tokens N] [--min-lines N]
                    [--report percentage|clones] [--ignore-locals]
                    [--ignore-literals] [--ignore-identifiers]
@@ -426,14 +428,40 @@ with magnitude at or below `--min-value` (100 — 0, 1, 10, 100 happen
 everywhere), protocol positions — object/dict keys, computed member
 indexes (`obj['name']`), switch case labels (the shared rule with
 `magic-constants`) — and import/export source specifiers (the JS analog
-of upstream's exempt import/export/part URIs). `--ignore VALUE` exempts a
+of upstream's exempt import/export/part URIs). The floors and the ignore
+list bind the constant corpus too: small ints (exit codes 0/1/2) and
+ignored values are coincidence by doctrine and neither collide in the
+regression rule nor seed the registry — an ignored value cannot be the
+canonical twin that flags someone else. `--ignore VALUE` exempts a
 value permanently: strings by value, numbers by their decimal form;
 entries containing `/` are file-path globs exempting whole files instead
 (a plain word silences the word, not a folder). `--exclude GLOB` drops
 files from the count; the default `src/` selection already excludes test
 files (the JS-side default for upstream's generated + `test/**` globs).
+
+**Pure alias** — a private `const` whose initializer is another
+constant's identifier (`const _appName = NAME;`) is flagged on sight:
+`alias \`_appName\` adds no information — reference \`NAME\` directly`.
+A private alias adds a name without information and hides that the
+vocabulary is shared. Public declarations are exempt (re-export shims
+are a deliberate API shape), computed initializers are not aliases, and
+`--no-aliases` switches the rule off (upstream's `aliases` config key,
+default true; any other gate's parser rejects the flag as unknown).
+
 Exit 2 iff violations exist; unknown flags and invalid numbers are usage
 errors (exit 1).
+
+Dogfood: the repo runs this gate on its own `src/` — the dogfood that
+motivated upstream's corpus fixes. The upgraded gate went from 124
+warnings on the pre-port tree to 1: shared vocabulary (AST node names,
+source extensions, CLI/config spellings like `test`, `--test`,
+`exclude`, `coverage`, `string`, the 1000 unit scale) got one home each
+(`src/constants.js`, `complexity.js`, `files.js`) and is referenced at
+every use site. The remaining warning is documented residue:
+mutation's `DEFAULT_MAX_MUTANTS = 500` coincides with memory's
+`DEFAULT_BADGE_THRESHOLD = 500` while naming two different facts —
+upstream exempts such coincidences via its `ignore` config; crap4js has
+no config file, so the code comment at the site documents it.
 
 ## `duplicates`
 

@@ -17,6 +17,8 @@
 // FunctionDeclarations are skipped — they are reported as their own entries.
 
 import { parse } from '@babel/parser';
+import { STRING } from './constants.js';
+import { TS_EXTENSIONS } from './files.js';
 
 const COMPLEXITY_TYPES = new Set([
   'IfStatement',
@@ -32,7 +34,28 @@ const COMPLEXITY_TYPES = new Set([
 
 const LOGICAL_OPS = new Set(['&&', '||']);
 
-const FUNCTION_LIKE = new Set(['FunctionExpression', 'ArrowFunctionExpression']);
+// Shared AST-node-type names and protocol spellings repeated across the
+// gates (magic-constants, scattered-constants, duplicates, test-assertions,
+// unused-code, ...): one home per spelling, referenced at every use site.
+export const ANON = '<anonymous>';
+export const IDENT = 'Identifier';
+export const CALL = 'CallExpression';
+export const MEMBER = 'MemberExpression';
+export const CONSTRUCTOR = 'constructor';
+export const FUNCTION_DECLARATION = 'FunctionDeclaration';
+export const FUNCTION_EXPRESSION = 'FunctionExpression';
+export const ARROW_FUNCTION_EXPRESSION = 'ArrowFunctionExpression';
+export const CLASS_METHOD = 'ClassMethod';
+export const CLASS_PRIVATE_METHOD = 'ClassPrivateMethod';
+export const STRING_LITERAL = 'StringLiteral';
+export const NUMERIC_LITERAL = 'NumericLiteral';
+export const IMPORT_DECLARATION = 'ImportDeclaration';
+export const EXPORT_NAMED_DECLARATION = 'ExportNamedDeclaration';
+// The `cognitive` metric name (CLI --metric value and report column pick);
+// this module hosts the computeCognitive implementation.
+export const COGNITIVE = 'cognitive';
+
+const FUNCTION_LIKE = new Set([FUNCTION_EXPRESSION, ARROW_FUNCTION_EXPRESSION]);
 
 // Babel attaches extra keys the generic traversal should not descend into
 // (comment arrays, raw-source `extra`, `directives`, byte offsets). acorn's
@@ -56,7 +79,7 @@ const COMMON_PLUGINS = [
 ];
 const FLOW_PLUGINS = [...COMMON_PLUGINS, 'flow'];
 const TS_PLUGINS = [...COMMON_PLUGINS, 'typescript'];
-const TS_EXTS = new Set(['.ts', '.tsx']);
+const TS_EXTS = new Set(TS_EXTENSIONS);
 
 /**
  * Parse source and return every method/function entry with its complexity.
@@ -90,7 +113,7 @@ function parseMethods(source, ext, metric) {
   const methods = [];
   // @babel/parser wraps the Program in a File node; the walker starts at Program.
   walkForEntries(ast.program, null, methods);
-  const complexityOf = metric === 'cognitive' ? computeCognitive : computeComplexity;
+  const complexityOf = metric === COGNITIVE ? computeCognitive : computeComplexity;
   for (const m of methods) m.complexity = complexityOf(m.node.body);
   return methods;
 }
@@ -137,7 +160,7 @@ export function parseTokenized(source, ext) {
 // bare strings (`CommentLine`/`CommentBlock`), while real tokens carry a
 // type object — skipped like upstream skips its CommentToken nodes.
 function isCommentToken(t) {
-  return typeof t.type === 'string';
+  return typeof t.type === STRING;
 }
 /**
  * Tokenize source with the port's standard plugin routing: every token's
@@ -158,10 +181,6 @@ export function tokenizeSource(source, ext) {
 // Sentinel: a handler returns this when it has already descended into the
 // node's children itself and the generic child traversal should be skipped.
 const SKIP = Symbol('skip');
-
-// Named constants for literals repeated across the module (magic_constants).
-const ANON = '<anonymous>';
-const IDENT = 'Identifier';
 
 // One handler per AST node type that yields a method entry or controls how
 // its children are traversed. Each handler is small (CC ≤ 4); walkForEntries
@@ -220,7 +239,7 @@ function classHandler(node, className, methods) {
 // Shared by ClassMethod and ClassPrivateMethod: the node itself is the function
 // (Babel), so loc/complexity come straight off it. Constructors are excluded.
 function classMethodHandler(node, className, methods) {
-  if (node.kind === 'constructor') return;
+  if (node.kind === CONSTRUCTOR) return;
   if (!node.body) return;
   const mn = keyName(node.key);
   methods.push(makeMethod(className ? `${className}.${mn}` : mn, node));
@@ -387,7 +406,7 @@ export function childrenOf(n) {
 }
 
 function isNamedFunctionDecl(n) {
-  return n.type === 'FunctionDeclaration' && n.id;
+  return n.type === FUNCTION_DECLARATION && n.id;
 }
 
 function keyName(key) {
@@ -402,7 +421,7 @@ function keyName(key) {
 export function leftName(node) {
   if (!node) return ANON;
   if (node.type === IDENT) return node.name;
-  if (node.type === 'MemberExpression') {
+  if (node.type === MEMBER) {
     const obj = leftName(node.object);
     const prop =
       node.property.type === IDENT && !node.computed

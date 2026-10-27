@@ -85,10 +85,11 @@ import { parseProfileArgs, runProfile } from './profile.js';
 import { runMemory } from './memory.js';
 import { runSkill } from './skill.js';
 import { isMain } from './mainGuard.js';
+import { COGNITIVE } from './complexity.js';
+import { COVERAGE, DEFAULT_COVERAGE, THRESHOLD_FLAG } from './constants.js';
 
 const DEFAULT_THRESHOLD = 8.0;
-const DEFAULT_COVERAGE = 'coverage/coverage-final.json';
-const METRICS = new Set(['cyclomatic', 'cognitive']);
+const METRICS = new Set(['cyclomatic', COGNITIVE]);
 
 function usage() {
   return [
@@ -123,11 +124,13 @@ function usage() {
     '                           repeated 3+ times per file.',
     '  crap4js scattered-constants [--min-files N] [--min-length N]',
     '                     [--min-value N] [--ignore VALUE]... [--exclude GLOB]...',
-    '                     [paths...]',
+    '                     [--aliases|--no-aliases] [paths...]',
     '                           Flag literals whose value repeats across',
     '                           distinct files: existing const declarations',
     '                           regress immediately, scattered values need',
-    '                           --min-files files',
+    '                           --min-files files; private const _x = kY;',
+    '                           pure aliases are flagged (--no-aliases opts',
+    '                           out).',
     '  crap4js duplicates [--threshold N] [--min-tokens N] [--min-lines N]',
     '                     [--report percentage|clones] [--ignore-locals]',
     '                     [--ignore-literals] [--ignore-identifiers]',
@@ -238,8 +241,8 @@ function applyArg(opts, argv, i) {
     opts[simple] = true;
     return i;
   }
-  if (isFlag(a, '--coverage')) return takeValue(opts, 'coverage', a, argv, i);
-  if (isFlag(a, '--threshold')) return takeValue(opts, 'threshold', a, argv, i);
+  if (isFlag(a, '--coverage')) return takeValue(opts, COVERAGE, a, argv, i);
+  if (isFlag(a, THRESHOLD_FLAG)) return takeValue(opts, 'threshold', a, argv, i);
   if (isFlag(a, '--metric')) return takeValue(opts, 'metric', a, argv, i);
   if (a.startsWith('--')) throw new Error(`Unknown flag: ${a}`);
   opts.paths.push(a);

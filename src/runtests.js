@@ -1,13 +1,14 @@
 // `--run-tests` helper: runs the project's test suite with coverage collection
 // before analysis. Throws on non-zero exit.
 
+import { TEST_FLAG } from './constants.js';
 import { spawnSync } from 'node:child_process';
 
 const SHELL = process.platform === 'win32';
 
 const COMMANDS = [
-  ['npx', ['nyc', '--reporter=json', '--reporter=text', 'node', '--test']],
-  ['npx', ['c8', '--reporter=json', 'node', '--test']],
+  ['npx', ['nyc', '--reporter=json', '--reporter=text', 'node', TEST_FLAG]],
+  ['npx', ['c8', '--reporter=json', 'node', TEST_FLAG]],
 ];
 
 /**

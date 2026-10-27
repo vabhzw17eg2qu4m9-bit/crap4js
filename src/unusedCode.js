@@ -11,6 +11,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { UTF8, gateFiles, toRelPath } from './files.js';
 import { runCheck, skipPartialSelection } from './gateCommon.js';
+import { EXPORT_NAMED_DECLARATION, IDENT } from './complexity.js';
 import { childrenOf, isNode, parseSource } from './complexity.js';
 
 /**
@@ -61,7 +62,7 @@ const MODULE_DECLARATIONS = {
 
 // Declarations at module scope that are NOT exported (module-private).
 function moduleDeclarationsOf(stmt) {
-  if (stmt.type === 'ExportNamedDeclaration' || stmt.type === 'ExportDefaultDeclaration') {
+  if (stmt.type === EXPORT_NAMED_DECLARATION || stmt.type === 'ExportDefaultDeclaration') {
     return [];
   }
   return MODULE_DECLARATIONS[stmt.type]?.(stmt) ?? [];
@@ -73,13 +74,13 @@ function namedDeclaration(stmt) {
 
 function variableDeclarations(stmt) {
   return stmt.declarations
-    .filter((d) => d.id.type === 'Identifier')
+    .filter((d) => d.id.type === IDENT)
     .map((d) => ({ name: d.id.name, line: d.loc.start.line }));
 }
 
 function countIdentifiers(n, counts) {
   if (!isNode(n)) return;
-  if (n.type === 'Identifier') {
+  if (n.type === IDENT) {
     counts.set(n.name, (counts.get(n.name) ?? 0) + 1);
   }
   for (const c of childrenOf(n)) countIdentifiers(c, counts);

@@ -9,9 +9,21 @@
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { TEST } from './constants.js';
 import { UTF8, testFiles, toRelPath } from './files.js';
 import { runCheck } from './gateCommon.js';
-import { childrenOf, isNode, parseSource } from './complexity.js';
+import {
+  ARROW_FUNCTION_EXPRESSION,
+  CALL,
+  FUNCTION_EXPRESSION,
+  IDENT,
+  IMPORT_DECLARATION,
+  MEMBER,
+  STRING_LITERAL,
+  childrenOf,
+  isNode,
+  parseSource,
+} from './complexity.js';
 
 const MIN_ASSERTIONS = 1;
 const ASSERT_SOURCES = new Set([
@@ -20,10 +32,7 @@ const ASSERT_SOURCES = new Set([
   'assert/strict',
   'node:assert/strict',
 ]);
-const TEST_REGISTRARS = new Set(['test', 'it']);
-const CALL = 'CallExpression';
-const IDENT = 'Identifier';
-const MEMBER = 'MemberExpression';
+const TEST_REGISTRARS = new Set([TEST, 'it']);
 
 /**
  * Test-assertion violations across files.
@@ -58,7 +67,7 @@ export function testAssertionViolations(files, projectRoot) {
 function assertBindings(program) {
   const names = new Set();
   for (const stmt of program.body) {
-    if (stmt.type === 'ImportDeclaration' && ASSERT_SOURCES.has(stmt.source.value)) {
+    if (stmt.type === IMPORT_DECLARATION && ASSERT_SOURCES.has(stmt.source.value)) {
       for (const s of stmt.specifiers) names.add(s.local.name);
     }
   }
@@ -99,12 +108,12 @@ function registrarOf(callee) {
 }
 
 function isFunction(node) {
-  return node?.type === 'FunctionExpression' || node?.type === 'ArrowFunctionExpression';
+  return node?.type === FUNCTION_EXPRESSION || node?.type === ARROW_FUNCTION_EXPRESSION;
 }
 
 // The test's label: its first argument's string value, else the registrar.
 function labelOf(call, kind) {
-  return call.arguments[0]?.type === 'StringLiteral' ? call.arguments[0].value : kind;
+  return call.arguments[0]?.type === STRING_LITERAL ? call.arguments[0].value : kind;
 }
 
 // Assertion calls anywhere in the test body: direct calls of assert
