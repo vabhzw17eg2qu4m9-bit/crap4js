@@ -633,7 +633,8 @@ function scanFileSites(file, scan) {
 function inDiff(scan, rel, site, method) {
   if (!scan.diff) return true;
   if (method) return diffIntersects(scan.diff, rel, method.startLine, method.endLine);
-  return diffIntersects(scan.diff, rel, site.line, site.line);
+  // One-line range on purpose: the site's own line is both range ends.
+  return diffIntersects(scan.diff, rel, site.line, site.line); // ignore:identical-branches — deliberate one-line range
 }
 
 // The method whose node span contains `offset`, or null.
