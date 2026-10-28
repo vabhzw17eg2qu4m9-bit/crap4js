@@ -479,7 +479,9 @@ of the crap4dart 4d844a4 record gates (`inline_record_types` +
 crap4dart mutation gate (commit c865ec3); `scattered-constants` is a
 port of the crap4dart scattered_constants gate (commit e766d68, v2);
 `string-hazards` is a port of the crap4dart string_hazards gate (upstream
-spec §11.25, commit 62fec6833e).
+spec §11.25, commit 62fec6833e); `identical-branches` is a port of the
+crap4dart identical_branches gate (upstream spec §11.26, commit
+c6b2425add).
 crap4js has no gate framework and no config file, so each gate is
 a CLI subcommand with its built-in default thresholds; every gate accepts
 `[paths...]` (default: the normal source-selection rules, test files and
@@ -496,7 +498,9 @@ overrides, and the violation `baseline` (`--save-baseline`/`--baseline`)
 mechanism. One exception arrives with the 0.23.0 `string_hazards` port:
 its warning default becomes the first warning-default gate here —
 findings print but exit 0, `--severity error` exits 2 (see
-[string-hazards](#string-hazards)). crap4js has no YAML config, so gate
+[string-hazards](#string-hazards)); `identical-branches` inherits the
+same severity discipline (same rationale: equivalence only holds for
+side-effect-free operands). crap4js has no YAML config, so gate
 options are CLI flags.
 The ignore-comment suppression system IS ported (crap4dart 8abb64c,
 `ignore_filter.dart`) with its per-gate `ignorable` opt-in hard-coded —
@@ -538,7 +542,7 @@ Ignorable mapping (upstream family → crap4js gate):
 
 | crap4js gates | markers honored | upstream families |
 |---|---|---|
-| `banned-imports`, `class-size`, `duplicates`, `inline-anon-types`, `magic-constants`, `nesting`, `scattered-constants`, `string-hazards`, `test-assertions`, `unused-code`, `weight-of-class` | line + file | `banned_imports`, `class_size`, `duplication`, `inline_record_types`+`record_size`, `magic_constants`, `nesting`, `scattered_constants`, `string_hazards`, `test_assertions`, `unused_code`, `weight_of_class` |
+| `banned-imports`, `class-size`, `duplicates`, `identical-branches`, `inline-anon-types`, `magic-constants`, `nesting`, `scattered-constants`, `string-hazards`, `test-assertions`, `unused-code`, `weight-of-class` | line + file | `banned_imports`, `class_size`, `duplication`, `identical_branches`, `inline_record_types`+`record_size`, `magic_constants`, `nesting`, `scattered_constants`, `string_hazards`, `test_assertions`, `unused_code`, `weight_of_class` |
 | `file-naming`, `unused-files` | file only (violations have no line) | `file_naming`, `unused_files` |
 | `folder-structure` | none — violations name directories, which no comment addresses | `folder_structure` |
 | `mutation` | none — its summary carries the pre-aggregated score, which would desync from the filtered violation list | `mutation` |
@@ -1205,6 +1209,77 @@ values are usage errors (exit 1). Violations honor ignore markers
 gate is default-on as a subcommand, and ignorable is the hard-coded
 registry entry. Dogfood: the gate runs clean on crap4js's own `src/`
 (37 files, 0 findings).
+
+### identical-branches
+
+`crap4js identical-branches [--severity warning|error] [paths...]`
+(port of the crap4dart identical_branches gate, upstream spec §11.26,
+commit c6b2425add) flags the copy-paste-edit bug family — syntactically
+identical pieces inside one construct where a second, slightly different
+piece was intended. All comparisons use a canonical form:
+whitespace-, comment- and parenthesis-independent (babel drops parens
+and comments; the serializer walks the AST structurally, literals
+compare by value), operands of commutative operators (`==`, `!=`,
+`===`, `!==`, `&&`, `||`, `+`, `*`, `&`, `|`, `^`) sorted, same-operator
+nests of the associative operators (`&&`, `||`, `+`, `*`, `&`, `|`, `^`)
+flattened. Non-commutative operators (`<`, `>`, `<=`, `>=`, `-`, `/`,
+`??`, ...) keep their operand order and shape: `a < b` and `b < a` stay
+distinct, `a - (b - c)` never flattens. Six finding kinds, with the JS
+host mapping:
+
+1. **Duplicate conditions** — two links of one `if`/`else if` chain
+   whose conditions compare equal; every later branch is unreachable.
+2. **Duplicate branch bodies** — two bodies in one chain whose
+   statements compare equal; a single-statement block compares equal to
+   the naked statement, and the violation points at the unwrapped
+   statement's line. An `else` equal to its `then` flags.
+3. **Duplicate operands and absorbed operands** — one `&&`/`||` chain
+   whose flattened operand list contains a repeated canonical operand
+   (`a || a` collapses to `a`), or an operand that also appears
+   standalone as another top-level operand's conjunct (for `||`) or
+   disjunct (for `&&`) — the absorption law (`a || b && a` collapses to
+   `a`). Only the outermost link of a same-operator chain is checked;
+   parenthesized links are transparent (`a || (b || c)` is one chain).
+4. **Identical ternary branches** — a conditional expression whose then
+   and else expressions compare equal (`c ? x : x` — the condition is
+   dead).
+5. **Duplicate positional arguments** — one call whose positional
+   argument list contains a repeated canonical argument, reported as
+   `(same as argument N)` against the positional slots. JS adaptations,
+   documented: JS has no named/keyword arguments, so upstream's
+   named-argument exemption has no analog — an options object is one
+   positional value like any other (two equal options objects in one
+   call flag); a spread element occupies no fixed slot and is exempt.
+   All-literal argument lists are exempt (uniform-value APIs like
+   `rect(8, 8, 8, 4)` stay quiet) and a literal argument is never
+   reported as the repeat.
+6. **Duplicate handler bodies** — JS's `try` admits exactly one catch
+   clause, so upstream's duplicate-catch-bodies check maps to the only
+   remaining same-construct handler pair: catch body vs finally body.
+   Identical failure and unconditional paths double-execute the same
+   code — a copy-paste where the two were meant to differ. The violation
+   points at the finally body (the later occurrence in source order,
+   like every repeat report).
+
+Only pieces of the *same* construct are compared; identical conditions
+in separate `if` statements are legal (the state may change between
+them), nested `if`s are their own chains. `switch` is excluded —
+duplicate cases are a syntax error in JS strict mode, so upstream's
+analyzer check has no counterpart. Severity: **warning by default** —
+findings are printed but exit 0; `--severity error` exits 2 (same
+discipline as string-hazards: reordering is equivalence-safe only for
+side-effect-free operands, which pure syntax cannot prove). Unknown
+`--flag=...` and unknown severity values are usage errors (exit 1).
+Violations honor ignore markers (`identical-branches` is in
+`IGNORABLE_GATES`). Upstream's `enabled`/`ignorable` config keys map to
+the port's conventions: the gate is default-on as a subcommand, and
+ignorable is the hard-coded registry entry. Upstream's
+`GateRunner.defaultGates()` duplicate-registration cleanup is N/A here
+— the subcommand dispatch table is a plain object literal (keys unique
+by syntax), verified duplicate-free. Dogfood: the gate runs on
+crap4js's own `src/` (1520 constructs); one finding, a deliberate
+one-line range (`diffIntersects(..., site.line, site.line)`), carries a
+reason-carrying `// ignore:identical-branches` marker — no real slips.
 
 ### not ported from 0.7–0.9 (no crap4js equivalent)
 

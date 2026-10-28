@@ -132,6 +132,18 @@ crap4js string-hazards [--severity warning|error] [paths...]
                          patterns of replace/replaceAll/split. Warning
                          by default — findings exit 0; --severity
                          error exits 2.
+crap4js identical-branches [--severity warning|error] [paths...]
+                         Flag the copy-paste-edit bug family — duplicate
+                         conditions/branch bodies in one if/else-if
+                         chain, duplicate operands in one &&/|| chain
+                         (absorption included), identical ternary
+                         branches, duplicate positional call arguments,
+                         duplicate catch/finally bodies — all compared
+                         by canonical form (whitespace-, comment- and
+                         parenthesis-insensitive; commutative operands
+                         sorted; same-operator nests flattened).
+                         Warning by default — findings exit 0;
+                         --severity error exits 2.
 crap4js skill            Print the crap4js profiling skill for AI agents.
 ```
 
@@ -142,15 +154,15 @@ The gate-check subcommands (`file-naming`, `nesting`, `class-size`,
 `weight-of-class`, `unused-code`, `unused-files`, `banned-imports`,
 `magic-constants`, `scattered-constants`, `duplicates`, `similarity`,
 `test-assertions`, `inline-anon-types`, `folder-structure`, `mutation`,
-`string-hazards`)
+`string-hazards`, `identical-branches`)
 are ports of
 crap4dart gates. crap4js has no gate framework or config
 file, so each gate is a subcommand with its default thresholds and the
 shared exit-code contract: `0` pass/skip, `1` usage error, `2` violations
 (`similarity` is informational and always exits 0 — see its section;
-`string-hazards` defaults to warning severity, where findings are
-printed but exit 0, and `--severity error` restores exit 2 — see its
-section).
+`string-hazards` and `identical-branches` default to warning severity,
+where findings are printed but exit 0, and `--severity error` restores
+exit 2 — see their sections).
 
 ### Example
 
@@ -871,6 +883,48 @@ printing and exit-code aggregation. Default selection: the `src/` walk;
 explicit paths may be files or directories (test files always excluded).
 Exit `1` on usage errors (unknown `--flag=...`, unknown severity value).
 
+## identical-branches
+
+`crap4js identical-branches [--severity warning|error] [paths...]`
+(port of crap4dart's identical_branches gate, upstream spec §11.26,
+commit c6b2425add) flags the copy-paste-edit bug family — syntactically
+identical pieces inside one construct where a second, slightly different
+piece was intended. All comparisons use a canonical form:
+whitespace-, comment- and parenthesis-independent, operands of
+commutative operators sorted (`a == b` matches `b == a`), same-operator
+nests of the associative operators flattened (`a && b && c` compares
+equal regardless of grouping). Non-commutative operators keep their
+shape: `a < b` and `b < a` stay distinct. Six finding kinds:
+
+1. **Duplicate conditions** in one `if`/`else if` chain — every later
+   branch is unreachable.
+2. **Duplicate branch bodies** in one chain (an `else` equal to its
+   `then`; a single-statement block equals the naked statement; the
+   violation points at the unwrapped statement's line).
+3. **Duplicate operands** in one `&&`/`||` chain (`a || a` collapses to
+   `a`) and **absorbed operands** (`a || b && a` collapses to `a`); only
+   the outermost link of a same-operator chain reports.
+4. **Identical ternary branches** (`c ? x : x` — the condition is dead).
+5. **Duplicate positional arguments** in one call (`f(w, h, w)`) —
+   all-literal lists exempt (uniform-value APIs), literals never
+   reported as the repeat, spread elements exempt; JS has no named
+   arguments, so upstream's named-argument exemption has no analog.
+6. **Duplicate handler bodies** in one `try` — JS's `try` has exactly
+   one catch clause, so this maps to catch body vs finally body:
+   identical failure and unconditional paths double-execute the same
+   code.
+
+Only pieces of the *same* construct are compared; identical conditions
+in separate `if` statements are legal. `switch` is excluded (duplicate
+cases are a syntax error in JS). Severity: default **warning** —
+findings are printed but exit 0; `--severity error` exits 2 (same
+rationale as string-hazards: equivalence assumes side-effect-free
+operands). Findings honor ignore markers (`// ignore:identical-branches`,
+or the legacy blanket markers). Exit `1` on usage errors. Deliberate
+same-expression sites (one-line ranges, idempotence asserts) carry a
+reason-carrying ignore marker — dogfood on crap4js's own `src/` found
+exactly one such site and no real slips.
+
 ## Ignore comments
 
 The gate subcommands honor ignore comments (port of crap4dart 8abb64c's
@@ -1007,6 +1061,7 @@ crap4js/
     mutationCache.js  digest-incremental mutation cache (killed-stays-killed)
     gateCommon.js  shared gate-subcommand runner
     stringHazards.js  string-hazards command
+    identicalBranches.js  identical-branches command
     imports.js     import-specifier collection + resolution
     skill.js       skill command text
   test/
