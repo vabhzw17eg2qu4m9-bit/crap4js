@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.27.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.26.0...v0.27.0) (2026-10-28)
+
+
+### Features
+
+* **gate:** identical-branches — copy-paste-edit family ([#73](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/73)) ([8dc8840](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/8dc884000aabbbb139660c23caf891289e7a6996))
+
 ## [0.26.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.25.0...v0.26.0) (2026-10-28)
 
 
