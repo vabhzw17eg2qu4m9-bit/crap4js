@@ -123,6 +123,15 @@ crap4js memory [--top N] [--format console|json] [--badge PATH]
 crap4js reorder [--dry-run] [paths...]
                          Rewrite class members into the canonical order
                          (deterministic; same-kind order kept).
+crap4js string-hazards [--severity warning|error] [paths...]
+                         Flag string literals whose escaping or pattern
+                         usage contradicts the intent: escaped template
+                         interpolations (\${name} with sibling ${name}
+                         evidence), RegExp sources with an escaped
+                         anchor (/...\$/), and ^/$ anchors in STRING
+                         patterns of replace/replaceAll/split. Warning
+                         by default — findings exit 0; --severity
+                         error exits 2.
 crap4js skill            Print the crap4js profiling skill for AI agents.
 ```
 
@@ -132,12 +141,16 @@ usage error.
 The gate-check subcommands (`file-naming`, `nesting`, `class-size`,
 `weight-of-class`, `unused-code`, `unused-files`, `banned-imports`,
 `magic-constants`, `scattered-constants`, `duplicates`, `similarity`,
-`test-assertions`, `inline-anon-types`, `folder-structure`, `mutation`)
+`test-assertions`, `inline-anon-types`, `folder-structure`, `mutation`,
+`string-hazards`)
 are ports of
 crap4dart gates. crap4js has no gate framework or config
 file, so each gate is a subcommand with its default thresholds and the
 shared exit-code contract: `0` pass/skip, `1` usage error, `2` violations
-(`similarity` is informational and always exits 0 — see its section).
+(`similarity` is informational and always exits 0 — see its section;
+`string-hazards` defaults to warning severity, where findings are
+printed but exit 0, and `--severity error` restores exit 2 — see its
+section).
 
 ### Example
 
@@ -810,6 +823,54 @@ selection is the `src/` walk; explicit paths may be files or
 directories (any source extension). Files that fail to parse are
 skipped with a note — never fatal.
 
+## string-hazards
+
+`crap4js string-hazards [--severity warning|error] [paths...]` (port of
+crap4dart's string_hazards gate, upstream spec §11.25, commit 62fec6833e)
+flags string literals whose escaping or pattern usage contradicts what
+the author almost certainly meant, from the parsed AST only. Three
+near-zero-false-positive checks:
+
+1. **Escaped interpolation** — `\${name}` / `\$name` inside a template
+   literal renders the literal text `$name`. Flagged only when the same
+   root identifier is genuinely interpolated (`${name}`) elsewhere in the
+   same file (sibling evidence), which keeps deliberate shell escapes
+   quiet. JS adaptation: plain `'...'` strings never interpolate, so they
+   are not scanned (upstream scans Dart's non-raw strings, which do), and
+   tagged templates (`String.raw` and friends) are out of scope, like
+   upstream's raw strings. Interpolated expressions contribute their ROOT
+   identifier: `user.name` and `builder.build()` evidence `user`;
+   index expressions (`list[0]`) and bare calls (`g()`) evidence nothing.
+2. **RegExp source with an escaped anchor** — a regex literal `/...\$/`
+   or the first string argument of `RegExp(...)` / `new RegExp(...)`
+   ending with `\$` (or starting with `\^`) matches a literal
+   dollar/caret where the end/start anchor was almost certainly intended
+   (a plain `$`/`^` is the anchor). The check reads the regex SOURCE: for
+   string arguments that is the decoded value (`'...\\$'` survives as
+   `\$`), for regex literals the pattern text as written.
+3. **Anchors in literal String patterns** — `String.prototype.replace` /
+   `replaceAll` / `split` treat a string search value as literal text, so
+   a leading `^` or a trailing `$` written unescaped can only ever match
+   that literal character — a RegExp was probably intended. Upstream's
+   raw trailing-`$` rule maps to the source form: `'abc\$'` (escaped in
+   source — dollar awareness) is spared, `'abc$'` is flagged. Only the
+   first argument (the pattern) is checked; non-literal arguments
+   (variables, regex values, `'a' + 'b$'` concatenations) and bare
+   `split(...)` calls without a receiver are skipped. Dart's
+   adjacent-strings part scan has no JS analog (no literal
+   juxtaposition), matching the magic-constants precedent.
+
+Deliberate literal dollars/carets (shell text, price patterns) trip the
+warnings occasionally — that is what the severity discipline is for:
+default **warning** — findings are printed but exit 0 (upstream's
+warning severity has no crap4js counterpart, so the port establishes the
+convention here, matching the go/py ports); `--severity error` makes
+findings exit 2. Either way the findings honor ignore markers
+(`// ignore:string-hazards`, or the legacy blanket markers) before
+printing and exit-code aggregation. Default selection: the `src/` walk;
+explicit paths may be files or directories (test files always excluded).
+Exit `1` on usage errors (unknown `--flag=...`, unknown severity value).
+
 ## Ignore comments
 
 The gate subcommands honor ignore comments (port of crap4dart 8abb64c's
@@ -945,6 +1006,7 @@ crap4js/
     mutation.js   mutation command (operator table, engine, coverage gating)
     mutationCache.js  digest-incremental mutation cache (killed-stays-killed)
     gateCommon.js  shared gate-subcommand runner
+    stringHazards.js  string-hazards command
     imports.js     import-specifier collection + resolution
     skill.js       skill command text
   test/
@@ -965,6 +1027,7 @@ crap4js/
     magicConstants.test.js
     testAssertions.test.js
     folderStructure.test.js
+    stringHazards.test.js
     profile.test.js
     skill.test.js
     cli.test.js

@@ -40,6 +40,7 @@ export const IGNORABLE_GATES = new Set([
   'magic-constants',
   'nesting',
   'scattered-constants',
+  'string-hazards',
   'test-assertions',
   'unused-code',
   'unused-files',

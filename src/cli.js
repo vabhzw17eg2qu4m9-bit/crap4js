@@ -53,13 +53,18 @@
 //   crap4js reorder [--dry-run] [paths...]
 //                            Rewrite class members into the canonical
 //                            order (deterministic; same-kind order kept).
+//   crap4js string-hazards [--severity warning|error] [paths...]
+//                            Flag escaped template interpolations, RegExp
+//                            escaped anchors, and ^/$ anchors in literal
+//                            String patterns (replace/replaceAll/split).
 //   crap4js skill            Print the crap4js profiling skill for AI agents.
 //
 // The first argument selects a subcommand when it is exactly `profile`,
 // `file-naming`, `nesting`, `class-size`, `weight-of-class`, `unused-code`,
 // `unused-files`, `banned-imports`, `magic-constants`, `scattered-constants`,
 // `duplicates`, `similarity`, `test-assertions`, `inline-anon-types`,
-// `folder-structure`, `mutation`, `reorder`, `memory`, or `skill`;
+// `folder-structure`, `mutation`, `reorder`, `string-hazards`, `memory`,
+// or `skill`;
 // anything else is analyzed as before.
 //
 // Exit codes: 0 success; 1 usage error; 2 CRAP/profile threshold exceeded
@@ -86,6 +91,7 @@ import { runInlineAnonTypes } from './inlineAnonTypes.js';
 import { runFolderStructure } from './folderStructure.js';
 import { runMutation } from './mutation.js';
 import { runReorder } from './reorder.js';
+import { runStringHazards } from './stringHazards.js';
 import { parseProfileArgs, runProfile } from './profile.js';
 import { runMemory } from './memory.js';
 import { runSkill } from './skill.js';
@@ -189,6 +195,16 @@ function usage() {
     '                           per-test allocation churn and heap growth.',
     '                           --badge writes a shields-style churn SVG.',
     '                           Informational — always exits 0.',
+    '  crap4js string-hazards [--severity warning|error] [paths...]',
+    '                           Flag string literals whose escaping or',
+    '                           pattern usage contradicts the intent:',
+    '                           escaped template interpolations (\\${name}',
+    '                           with sibling ${name} evidence), RegExp',
+    '                           sources with an escaped anchor (/...\\$/)',
+    '                           and ^/$ anchors in STRING patterns of',
+    '                           replace/replaceAll/split. Warning by',
+    '                           default — findings exit 0; --severity',
+    '                           error exits 2.',
     '  crap4js skill            Print the crap4js profiling skill for AI agents',
     '',
   ].join('\n');
@@ -214,6 +230,7 @@ const SUBCOMMANDS = {
   'folder-structure': (args, ctx) => runFolderStructure(args, ctx),
   mutation: (args, ctx) => runMutation(args, ctx),
   reorder: (args, ctx) => runReorder(args, ctx),
+  'string-hazards': (args, ctx) => runStringHazards(args, ctx),
   memory: (args, ctx) => runMemory(args, ctx),
   skill: (_args, ctx) => runSkill(ctx),
 };
