@@ -49,6 +49,11 @@ export const CLASS_METHOD = 'ClassMethod';
 export const CLASS_PRIVATE_METHOD = 'ClassPrivateMethod';
 export const STRING_LITERAL = 'StringLiteral';
 export const NUMERIC_LITERAL = 'NumericLiteral';
+// Template/regex spellings shared with the string-hazards gate.
+export const TEMPLATE_LITERAL = 'TemplateLiteral';
+export const TAGGED_TEMPLATE = 'TaggedTemplateExpression';
+export const REGEX_LITERAL = 'RegExpLiteral';
+export const NEW_EXPRESSION = 'NewExpression';
 export const IMPORT_DECLARATION = 'ImportDeclaration';
 export const EXPORT_NAMED_DECLARATION = 'ExportNamedDeclaration';
 // The `cognitive` metric name (CLI --metric value and report column pick);

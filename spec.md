@@ -477,7 +477,9 @@ folder_structure, and duplication gates; `inline-anon-types` is a port
 of the crap4dart 4d844a4 record gates (`inline_record_types` +
 `record_size`, merged and adapted); `mutation` is a port of the
 crap4dart mutation gate (commit c865ec3); `scattered-constants` is a
-port of the crap4dart scattered_constants gate (commit e766d68, v2).
+port of the crap4dart scattered_constants gate (commit e766d68, v2);
+`string-hazards` is a port of the crap4dart string_hazards gate (upstream
+spec §11.25, commit 62fec6833e).
 crap4js has no gate framework and no config file, so each gate is
 a CLI subcommand with its built-in default thresholds; every gate accepts
 `[paths...]` (default: the normal source-selection rules, test files and
@@ -491,7 +493,11 @@ Upstream 0.5.0 gate-framework features that have no crap4js equivalent
 and are intentionally NOT ported: `severity` (warning downgrade),
 per-gate `entries` threshold
 overrides, and the violation `baseline` (`--save-baseline`/`--baseline`)
-mechanism. crap4js has no YAML config, so gate options are CLI flags.
+mechanism. One exception arrives with the 0.23.0 `string_hazards` port:
+its warning default becomes the first warning-default gate here —
+findings print but exit 0, `--severity error` exits 2 (see
+[string-hazards](#string-hazards)). crap4js has no YAML config, so gate
+options are CLI flags.
 The ignore-comment suppression system IS ported (crap4dart 8abb64c,
 `ignore_filter.dart`) with its per-gate `ignorable` opt-in hard-coded —
 crap4js has no config file, so the ignorable set is a registry
@@ -532,7 +538,7 @@ Ignorable mapping (upstream family → crap4js gate):
 
 | crap4js gates | markers honored | upstream families |
 |---|---|---|
-| `banned-imports`, `class-size`, `duplicates`, `inline-anon-types`, `magic-constants`, `nesting`, `scattered-constants`, `test-assertions`, `unused-code`, `weight-of-class` | line + file | `banned_imports`, `class_size`, `duplication`, `inline_record_types`+`record_size`, `magic_constants`, `nesting`, `scattered_constants`, `test_assertions`, `unused_code`, `weight_of_class` |
+| `banned-imports`, `class-size`, `duplicates`, `inline-anon-types`, `magic-constants`, `nesting`, `scattered-constants`, `string-hazards`, `test-assertions`, `unused-code`, `weight-of-class` | line + file | `banned_imports`, `class_size`, `duplication`, `inline_record_types`+`record_size`, `magic_constants`, `nesting`, `scattered_constants`, `string_hazards`, `test_assertions`, `unused_code`, `weight_of_class` |
 | `file-naming`, `unused-files` | file only (violations have no line) | `file_naming`, `unused_files` |
 | `folder-structure` | none — violations name directories, which no comment addresses | `folder_structure` |
 | `mutation` | none — its summary carries the pre-aggregated score, which would desync from the filtered violation list | `mutation` |
@@ -1145,6 +1151,60 @@ metrics rounded to 4 decimals and stdout kept JSON-only.
 Dogfooding matches upstream: the port's own md corpus (README, spec,
 CHANGELOG) measures clean at jaccard 0.6 / containment 0.9 and still at
 0.5/0.85.
+
+### string-hazards
+
+`crap4js string-hazards [--severity warning|error] [paths...]` (port of
+the crap4dart string_hazards gate, upstream spec §11.25, commit
+62fec6833e) flags string literals whose escaping or pattern usage
+contradicts what the author almost certainly meant, from the parsed
+AST only. Three finding kinds, with the JS host mapping:
+
+1. **Escaped interpolation** — inside a template literal, a `\$` followed
+   by an identifier (optionally brace-enclosed: `\${name}`) renders the
+   literal text `$name`. The gate flags such an occurrence only when the
+   same ROOT identifier is genuinely interpolated elsewhere in the same
+   file (sibling-interpolation evidence); otherwise the escape is
+   presumed deliberate (shell text, prices). Root of an interpolated
+   expression: `user.name` → `user`, `a.b.c` → `a`,
+   `builder.build()` → `builder`; computed member access (`list[0]`) and
+   bare calls (`g()`) provide no root, like upstream's index/call
+   expressions. Violations dedupe per (line, identifier). JS omissions,
+   documented: plain `'...'` strings never interpolate, so they are not
+   scanned (Dart's non-raw strings do interpolate); tagged templates
+   (`String.raw` and friends) are out of scope, like upstream's raw
+   strings.
+2. **RegExp source with an escaped anchor** — a regex literal `/...\$/`
+   or the first string argument of `RegExp(...)` / `new RegExp(...)`
+   ending with `\$` or starting with `\^`. The check reads the regex
+   SOURCE — for string arguments the decoded value (`'...\\$'` survives
+   into the regex as `\$`), for regex literals the pattern text — so a
+   plain `$`/`^` stays an anchor and only the escaped form flags.
+   Non-literal arguments are skipped.
+3. **Anchors in literal String patterns** — a string literal passed as
+   the first argument of a receiver call `x.replace` / `x.replaceAll` /
+   `x.split` (String patterns match literally) whose text starts with
+   `^` or ends with an unescaped `$`. Bare `split(...)` calls without a
+   receiver are out of scope (upstream: `target == null`). The escaped
+   trailing form is spared via the raw source text — `'abc\$'` shows
+   dollar awareness, `'abc$'` flags (the JS analog of upstream's
+   raw-vs-escaped trailing-`$` distinction). Dart's adjacent-strings
+   part scan has no JS analog (no literal juxtaposition;
+   `'a' + 'b$'` arguments are non-literal and skipped), matching the
+   magic-constants precedent.
+
+Upstream's `replaceFirstMapped` / `replaceAllMapped` have no JS analog;
+`replace` covers the replace family. Severity: **warning by default** —
+findings are printed but exit 0 (upstream's warning severity has no
+gate-framework counterpart in crap4js; this is the port's first
+warning-default gate, consistent with the go/py ports);
+`--severity error` exits 2. Unknown `--flag=...` and unknown severity
+values are usage errors (exit 1). Violations honor ignore markers
+(`string-hazards` is in `IGNORABLE_GATES`). Upstream's
+`enabled`/`ignorable` config keys map to the port's conventions: the
+gate is default-on as a subcommand, and ignorable is the hard-coded
+registry entry. Dogfood: the gate runs clean on crap4js's own `src/`
+(37 files, 0 findings).
 
 ### not ported from 0.7–0.9 (no crap4js equivalent)
 
