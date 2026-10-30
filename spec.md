@@ -482,7 +482,9 @@ port of the crap4dart scattered_constants gate (commit e766d68, v2);
 spec §11.25, commit 62fec6833e); `identical-branches` is a port of the
 crap4dart identical_branches gate (upstream spec §11.26, commit
 c6b2425add); `collapsible-flow` is a port of the crap4dart
-collapsible_flow gate (upstream spec §11.28, commit 7bdfd64ae1).
+collapsible_flow gate (upstream spec §11.28, commit 7bdfd64ae1);
+`non-null-assertion` is a port of the crap4dart non_null_assertion
+gate (upstream spec §11.29, commit e3ad58594c).
 crap4js has no gate framework and no config file, so each gate is
 a CLI subcommand with its built-in default thresholds; every gate accepts
 `[paths...]` (default: the normal source-selection rules, test files and
@@ -503,7 +505,12 @@ findings print but exit 0, `--severity error` exits 2 (see
 same severity discipline (same rationale: equivalence only holds for
 side-effect-free operands), and `collapsible-flow` adopts it because
 every one of its findings is correct code — the gate trades flatness,
-not bugs. crap4js has no YAML config, so gate
+not bugs. `non-null-assertion` adopts it too, for the upstream
+rationale: on an existing codebase every removed `!` needs a per-site
+nullability audit (upstream adopts via the `--save-baseline` ratchet,
+which crap4js does not port — the ratchet is a manual discipline, see
+[non-null-assertion](#non-null-assertion)). crap4js has no YAML config,
+so gate
 options are CLI flags.
 The ignore-comment suppression system IS ported (crap4dart 8abb64c,
 `ignore_filter.dart`) with its per-gate `ignorable` opt-in hard-coded —
@@ -545,7 +552,7 @@ Ignorable mapping (upstream family → crap4js gate):
 
 | crap4js gates | markers honored | upstream families |
 |---|---|---|
-| `banned-imports`, `class-size`, `collapsible-flow`, `duplicates`, `identical-branches`, `inline-anon-types`, `magic-constants`, `nesting`, `scattered-constants`, `string-hazards`, `test-assertions`, `unused-code`, `weight-of-class` | line + file | `banned_imports`, `class_size`, `collapsible_flow`, `duplication`, `identical_branches`, `inline_record_types`+`record_size`, `magic_constants`, `nesting`, `scattered_constants`, `string_hazards`, `test_assertions`, `unused_code`, `weight_of_class` |
+| `banned-imports`, `class-size`, `collapsible-flow`, `duplicates`, `identical-branches`, `inline-anon-types`, `magic-constants`, `nesting`, `non-null-assertion`, `scattered-constants`, `string-hazards`, `test-assertions`, `unused-code`, `weight-of-class` | line + file | `banned_imports`, `class_size`, `collapsible_flow`, `duplication`, `identical_branches`, `inline_record_types`+`record_size`, `magic_constants`, `nesting`, `non_null_assertion`, `scattered_constants`, `string_hazards`, `test_assertions`, `unused_code`, `weight_of_class` |
 | `file-naming`, `unused-files` | file only (violations have no line) | `file_naming`, `unused_files` |
 | `folder-structure` | none — violations name directories, which no comment addresses | `folder_structure` |
 | `mutation` | none — its summary carries the pre-aggregated score, which would desync from the filtered violation list | `mutation` |
@@ -1340,6 +1347,66 @@ else-if chain a blind dedent would move the fallback out of the
 chain's else scope and change behavior, which the profile arg tests
 caught during the port). The gate now runs clean on `src/`
 (37 files, 509 if statements checked).
+
+### non-null-assertion
+
+`crap4js non-null-assertion [--severity warning|error] [paths...]`
+(port of the crap4dart non_null_assertion gate, upstream spec §11.29,
+commit e3ad58594c) flags every TS non-null assertion, resolved from
+the parsed AST only. A bang crashes on null where the null-safe
+alternatives carry the same intent with a readable check: `?.`/`??` —
+the common check-then-bang ternary `E != null ? E!.m() : f` collapses
+to `E?.m() ?? f` (single receiver evaluation, no bang). The gate
+applies zero thresholds: any `!` is a finding, and every violation
+shall carry the file and line of the `!` token (the bang is the
+flagged node's last character, so the node's end line is the token's
+line — an operand spanning several lines reports where the `!` sits,
+not where the expression starts).
+
+JS host mapping, per shape:
+
+1. **Postfix `!` expression** — Dart's `x!`, `map['k']!`, and chains
+   (`a!.b!`) map to the TypeScript `TSNonNullExpression` node, one
+   node per bang, so a chain reports each `!` separately. Only
+   `.ts`/`.tsx` files can carry the node: @babel/parser routes the
+   typescript plugin by file extension (complexity.js parseSource) and
+   the flow plugin has no such node — a `.js` file can never flag
+   here.
+2. **Null-assert pattern** — Dart's `case var x!:` has no TS analog;
+   omitted, and so is upstream's pattern-side fix, the null-check
+   pattern (`case var x?`).
+
+Not flagged (distinct AST nodes — the exclusions hold by
+construction): `!=`/`!==` (BinaryExpression), the logical-not prefix
+`!x` (UnaryExpression), `++`/`--` (UpdateExpression), null-aware
+access `?.` (OptionalMemberExpression/OptionalCallExpression), and
+`??` (LogicalExpression). A bang inside a string or template literal
+is literal text. Type casts are not bangs: `x as T` parses as
+TSAsExpression, and the angle-bracket cast `<T>x` does not parse at
+all under the port's jsx+typescript routing (ambiguous with JSX), so
+neither reaches this gate.
+
+Summary format: `M files scanned, no non-null assertions` on pass,
+`N non-null assertion(s) (M files scanned)` on findings. Severity:
+**warning by default** — findings are printed but exit 0;
+`--severity error` exits 2. The warning default is upstream's posture:
+on an existing codebase every removed `!` needs a per-site
+nullability audit, and upstream adopts via the baseline ratchet
+(`check --save-baseline`). crap4js ports NO baseline machinery
+(upstream's `--save-baseline`/`--baseline` is in the not-ported list);
+the ratchet stays a manual discipline: record the count this gate
+reports, drive it to zero, then enforce with `--severity error`. Gate
+ordering is N/A — the subcommand runs on demand, not in upstream's
+fixed run order. Unknown `--flag=...` and unknown severity
+values are usage errors (exit 1). Violations honor ignore markers
+(`non-null-assertion` is in `IGNORABLE_GATES`); upstream's
+`enabled`/`ignorable` config keys map to the port's conventions:
+default-on subcommand, hard-coded registry entry. Upstream's
+`gate_configs_quality.dart` reader and its config tests are N/A —
+crap4js has no config file. Dogfood: the first self-scan of crap4js's
+own source found zero bangs (40 files scanned; the repo has no
+`.ts`/`.tsx` files, so the TS-only gate has no surface in this
+codebase yet).
 
 ### not ported from 0.7–0.9 (no crap4js equivalent)
 

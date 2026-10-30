@@ -68,6 +68,11 @@
 //                            Flag control-flow nesting a mechanical
 //                            rewrite can flatten (merge nested ifs,
 //                            drop redundant else; chain hints).
+//   crap4js non-null-assertion [--severity warning|error] [paths...]
+//                            Flag every TS non-null assertion (x!,
+//                            obj['k']!, chains) in .ts/.tsx — a bang
+//                            crashes on null; ?. / ?? carry the same
+//                            intent with a readable check.
 //   crap4js skill            Print the crap4js profiling skill for AI agents.
 //
 // The first argument selects a subcommand when it is exactly `profile`,
@@ -75,7 +80,8 @@
 // `unused-files`, `banned-imports`, `magic-constants`, `scattered-constants`,
 // `duplicates`, `similarity`, `test-assertions`, `inline-anon-types`,
 // `folder-structure`, `mutation`, `reorder`, `string-hazards`,
-// `identical-branches`, `collapsible-flow`, `memory`, or `skill`;
+// `identical-branches`, `collapsible-flow`, `non-null-assertion`,
+// `memory`, or `skill`;
 // anything else is analyzed as before.
 //
 // Exit codes: 0 success; 1 usage error; 2 CRAP/profile threshold exceeded
@@ -105,6 +111,7 @@ import { runReorder } from './reorder.js';
 import { runStringHazards } from './stringHazards.js';
 import { runIdenticalBranches } from './identicalBranches.js';
 import { runCollapsibleFlow } from './collapsibleFlow.js';
+import { runNonNullAssertion } from './nonNullAssertion.js';
 import { parseProfileArgs, runProfile } from './profile.js';
 import { runMemory } from './memory.js';
 import { runSkill } from './skill.js';
@@ -237,6 +244,13 @@ function usage() {
     '                           terminal then (hint only). Warning by',
     '                           default — findings exit 0; --severity',
     '                           error exits 2.',
+    '  crap4js non-null-assertion [--severity warning|error] [paths...]',
+    '                           Flag every TS non-null assertion (x!,',
+    '                           obj[\'k\']!, chains) in .ts/.tsx files —',
+    '                           a bang crashes on null; ?. / ?? carry',
+    '                           the same intent with a readable',
+    '                           check. Warning by default — findings',
+    '                           exit 0; --severity error exits 2.',
     '  crap4js skill            Print the crap4js profiling skill for AI agents',
     '',
   ].join('\n');
@@ -265,6 +279,7 @@ const SUBCOMMANDS = {
   'string-hazards': (args, ctx) => runStringHazards(args, ctx),
   'identical-branches': (args, ctx) => runIdenticalBranches(args, ctx),
   'collapsible-flow': (args, ctx) => runCollapsibleFlow(args, ctx),
+  'non-null-assertion': (args, ctx) => runNonNullAssertion(args, ctx),
   memory: (args, ctx) => runMemory(args, ctx),
   skill: (_args, ctx) => runSkill(ctx),
 };

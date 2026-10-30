@@ -153,6 +153,14 @@ crap4js collapsible-flow [--severity warning|error] [paths...]
                          terminal then (hint only — guard clauses or a
                          dispatch table). Warning by default — findings
                          exit 0; --severity error exits 2.
+crap4js non-null-assertion [--severity warning|error] [paths...]
+                         Flag every TS non-null assertion (x!,
+                         obj['k']!, chains a!.b!) in .ts/.tsx files —
+                         a bang crashes on null; ?. / ?? carry the
+                         same intent with a readable check (!=, !x,
+                         ++/--, ?. and ?? are not flagged). Warning by
+                         default — findings exit 0; --severity error
+                         exits 2.
 crap4js skill            Print the crap4js profiling skill for AI agents.
 ```
 
@@ -163,13 +171,15 @@ The gate-check subcommands (`file-naming`, `nesting`, `class-size`,
 `weight-of-class`, `unused-code`, `unused-files`, `banned-imports`,
 `magic-constants`, `scattered-constants`, `duplicates`, `similarity`,
 `test-assertions`, `inline-anon-types`, `folder-structure`, `mutation`,
-`string-hazards`, `identical-branches`, `collapsible-flow`)
+`string-hazards`, `identical-branches`, `collapsible-flow`,
+`non-null-assertion`)
 are ports of
 crap4dart gates. crap4js has no gate framework or config
 file, so each gate is a subcommand with its default thresholds and the
 shared exit-code contract: `0` pass/skip, `1` usage error, `2` violations
 (`similarity` is informational and always exits 0 — see its section;
-`string-hazards`, `identical-branches`, and `collapsible-flow` default
+`string-hazards`, `identical-branches`, `collapsible-flow`, and
+`non-null-assertion` default
 to warning severity, where findings are printed but exit 0, and
 `--severity error` restores exit 2 — see their sections).
 
@@ -979,6 +989,52 @@ redundant else bodies in the `profile.js`/`reorder.js` flag parsers —
 fixed by dedenting the fallback behind the exiting throw, guarded by
 the same branch); the gate now runs clean (37 files, 509 if
 statements).
+
+## non-null-assertion
+
+`crap4js non-null-assertion [--severity warning|error] [paths...]`
+(port of crap4dart's non_null_assertion gate, upstream spec §11.29,
+commit e3ad58594c) flags every TS non-null assertion — the postfix `!`
+operator. A bang crashes on null where the null-safe alternatives
+carry the same intent with a readable check: `?.`/`??` — the common
+check-then-bang ternary `E != null ? E!.m() : f` collapses to
+`E?.m() ?? f` (single receiver evaluation, no bang). Zero thresholds:
+any `!` is a finding, and the violation carries the line of the `!`
+token.
+
+JS host mapping:
+
+- Dart's postfix `!` (`x!`, `map['k']!`, chains `a!.b!`) is the
+  TypeScript `TSNonNullExpression` node — only `.ts`/`.tsx` files can
+  carry it: @babel/parser routes the typescript plugin by extension and
+  the flow plugin has no such node, so a `.js` file can never flag here
+  (its `!` is the logical-not prefix).
+- Not flagged, by construction: `!=`/`!==` (BinaryExpression), the
+  logical-not prefix `!x` (UnaryExpression), `++`/`--`
+  (UpdateExpression), null-aware access `?.`
+  (OptionalMemberExpression/OptionalCallExpression), and `??`
+  (LogicalExpression) — none of these is a TSNonNullExpression.
+- Dart's null-assert pattern (`case var x!`) has no TS analog —
+  omitted; so is upstream's pattern-side fix, the null-check pattern
+  (`case var x?`).
+- Type casts are not bangs: `x as T` parses as TSAsExpression, and the
+  angle-bracket cast `<T>x` does not parse at all under the port's
+  jsx+typescript routing (ambiguous with JSX), so neither reaches this
+  gate. A bang inside a string or template literal is just literal
+  text.
+
+Severity: default **warning** — findings are printed but exit 0;
+`--severity error` exits 2. The warning default is deliberate: on an
+existing codebase every removed `!` needs a per-site nullability
+audit. Upstream adopts via the baseline ratchet (`check
+--save-baseline`); crap4js has no baseline machinery, so the ratchet
+is a manual discipline: record the count this gate reports, drive it
+to zero, then run with `--severity error` (CI or pre-commit) to keep
+it there. Findings honor ignore markers
+(`// ignore:non-null-assertion`, or the legacy blanket markers). Exit
+`1` on usage errors. Dogfood: the first self-scan of crap4js's own
+source found zero bangs (40 files scanned; the repo has no `.ts`/
+`.tsx` files, so the TS-only gate has no surface in this codebase yet).
 
 ## Ignore comments
 
