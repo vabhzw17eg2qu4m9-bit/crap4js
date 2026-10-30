@@ -41,6 +41,7 @@ export const IGNORABLE_GATES = new Set([
   'inline-anon-types',
   'magic-constants',
   'nesting',
+  'non-null-assertion',
   'scattered-constants',
   'string-hazards',
   'test-assertions',
