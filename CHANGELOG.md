@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.29.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.28.0...v0.29.0) (2026-10-30)
+
+
+### Features
+
+* **gate:** non-null-assertion — ban the TS bang operator (adapted from upstream e3ad58594c) ([#77](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/77)) ([bb56b5a](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/bb56b5a16a3b176e9a56f72bb5e8b8895036507a))
+
 ## [0.28.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.27.0...v0.28.0) (2026-10-30)
 
 
