@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.28.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.27.0...v0.28.0) (2026-10-30)
+
+
+### Features
+
+* **gate:** collapsible-flow — flatten mechanical control-flow nesting (adapted from upstream 7bdfd64ae1) ([#75](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/75)) ([76a8637](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/76a8637b924de61b3b364a5a87f4618732ea5627))
+
 ## [0.27.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.26.0...v0.27.0) (2026-10-28)
 
 
