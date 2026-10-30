@@ -282,8 +282,12 @@ function parseReorderArgs(args) {
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '--dry-run' || a === '-n') out.dryRun = true;
-    else if (a.startsWith('--')) throw new Error(`Unknown flag: ${a}`);
-    else out.paths.push(a);
+    else {
+      // The throw exits, so its else was redundant — the fallback dedents
+      // behind it, still guarded by this branch (collapsible-flow fix).
+      if (a.startsWith('--')) throw new Error(`Unknown flag: ${a}`);
+      out.paths.push(a);
+    }
   }
   return out;
 }

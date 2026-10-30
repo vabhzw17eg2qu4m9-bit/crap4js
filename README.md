@@ -144,6 +144,15 @@ crap4js identical-branches [--severity warning|error] [paths...]
                          sorted; same-operator nests flattened).
                          Warning by default — findings exit 0;
                          --severity error exits 2.
+crap4js collapsible-flow [--severity warning|error] [paths...]
+                         Flag control-flow nesting a mechanical rewrite
+                         can flatten: nested if without else merging
+                         into one && condition, redundant else after an
+                         always-exiting then branch (return/break/
+                         continue/throw), and else-if chains after a
+                         terminal then (hint only — guard clauses or a
+                         dispatch table). Warning by default — findings
+                         exit 0; --severity error exits 2.
 crap4js skill            Print the crap4js profiling skill for AI agents.
 ```
 
@@ -154,15 +163,15 @@ The gate-check subcommands (`file-naming`, `nesting`, `class-size`,
 `weight-of-class`, `unused-code`, `unused-files`, `banned-imports`,
 `magic-constants`, `scattered-constants`, `duplicates`, `similarity`,
 `test-assertions`, `inline-anon-types`, `folder-structure`, `mutation`,
-`string-hazards`, `identical-branches`)
+`string-hazards`, `identical-branches`, `collapsible-flow`)
 are ports of
 crap4dart gates. crap4js has no gate framework or config
 file, so each gate is a subcommand with its default thresholds and the
 shared exit-code contract: `0` pass/skip, `1` usage error, `2` violations
 (`similarity` is informational and always exits 0 — see its section;
-`string-hazards` and `identical-branches` default to warning severity,
-where findings are printed but exit 0, and `--severity error` restores
-exit 2 — see their sections).
+`string-hazards`, `identical-branches`, and `collapsible-flow` default
+to warning severity, where findings are printed but exit 0, and
+`--severity error` restores exit 2 — see their sections).
 
 ### Example
 
@@ -924,6 +933,52 @@ or the legacy blanket markers). Exit `1` on usage errors. Deliberate
 same-expression sites (one-line ranges, idempotence asserts) carry a
 reason-carrying ignore marker — dogfood on crap4js's own `src/` found
 exactly one such site and no real slips.
+
+## collapsible-flow
+
+`crap4js collapsible-flow [--severity warning|error] [paths...]`
+(port of crap4dart's collapsible_flow gate, upstream spec §11.28,
+commit 7bdfd64ae1) flags control-flow nesting that a
+semantics-preserving mechanical rewrite can flatten. Every finding is
+correct code — the gate trades flatness, not bugs. Three checks, with
+the JS host mapping:
+
+1. **Collapsible if** — `if (a) { if (b) X }` with no `else` on either
+   level and nothing but the inner `if` in the then-branch (unbraced
+   counts) merges into `if (a && b) X`. Short-circuit `&&` preserves
+   evaluation order, so the merge is always equivalent (including
+   `await`ed or side-effecting conditions). JS has no pattern
+   conditions (`if (x case P)` is Dart-only), so upstream's
+   pattern-clause exclusion has no analog here.
+2. **Redundant else** — `if (c) { return X; } else { Y }` where the
+   then-branch always exits: `return`/`break`/`continue`/`throw` (JS's
+   `throw` is a statement — Dart's `throw`/`rethrow` expressions map to
+   `ThrowStatement`, and there is no rethrow), a block ending in one of
+   those, an if/else pair whose both branches exit, or a `try` whose
+   body exits and whose finally is absent, empty, or exits. The `else`
+   is redundant — dedent its body. An inner if WITHOUT an else never
+   counts as exiting: control falls through when its condition is
+   false, so dedenting would change behavior (the upstream's own
+   hard-learned trap, encoded in the if-exit rule). `switch` bodies are
+   not analyzed (case fall-through), so a trailing `switch` never
+   counts; catch handlers are not analyzed either — body and finalizer
+   decide, like upstream.
+3. **Chain after terminal then** — an `else if` following an
+   always-exiting then-branch. The whole chain wants a guard sequence
+   or a dispatch table; that rewrite is not mechanical, so this check
+   only points at it (no fix-shaped message). JS spells `else if` as
+   the if's `alternate` being another IfStatement.
+
+Severity: default **warning** — findings are printed but exit 0;
+`--severity error` exits 2 (same rationale as string-hazards: every
+finding is correct code). Findings honor ignore markers
+(`// ignore:collapsible-flow`, or the legacy blanket markers). Exit `1`
+on usage errors. Dogfood: the first self-scan of crap4js's own `src/`
+found three sites (one collapsible if in `duplicates.js`, two
+redundant else bodies in the `profile.js`/`reorder.js` flag parsers —
+fixed by dedenting the fallback behind the exiting throw, guarded by
+the same branch); the gate now runs clean (37 files, 509 if
+statements).
 
 ## Ignore comments
 

@@ -313,9 +313,8 @@ function addTypeParam(node, names) {
 // Parameter bindings for every function-flavoured node. The scope's own
 // name is API surface and stays unrenamed (root skipped, nested collected).
 function collectFunctionLocals(node, root, names) {
-  if (node.type === FUNCTION_DECLARATION || node.type === FUNCTION_EXPRESSION) {
-    if (node !== root && node.id) names.add(node.id.name);
-  }
+  if ((node.type === FUNCTION_DECLARATION || node.type === FUNCTION_EXPRESSION)
+    && node !== root && node.id) names.add(node.id.name);
   for (const param of node.params) bindings(param, names);
 }
 

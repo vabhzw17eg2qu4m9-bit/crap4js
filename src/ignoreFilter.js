@@ -34,6 +34,7 @@ import { UTF8 } from './files.js';
 export const IGNORABLE_GATES = new Set([
   'banned-imports',
   'class-size',
+  'collapsible-flow',
   'duplicates',
   'file-naming',
   'identical-branches',
