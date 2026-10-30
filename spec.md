@@ -481,7 +481,8 @@ port of the crap4dart scattered_constants gate (commit e766d68, v2);
 `string-hazards` is a port of the crap4dart string_hazards gate (upstream
 spec §11.25, commit 62fec6833e); `identical-branches` is a port of the
 crap4dart identical_branches gate (upstream spec §11.26, commit
-c6b2425add).
+c6b2425add); `collapsible-flow` is a port of the crap4dart
+collapsible_flow gate (upstream spec §11.28, commit 7bdfd64ae1).
 crap4js has no gate framework and no config file, so each gate is
 a CLI subcommand with its built-in default thresholds; every gate accepts
 `[paths...]` (default: the normal source-selection rules, test files and
@@ -500,7 +501,9 @@ its warning default becomes the first warning-default gate here —
 findings print but exit 0, `--severity error` exits 2 (see
 [string-hazards](#string-hazards)); `identical-branches` inherits the
 same severity discipline (same rationale: equivalence only holds for
-side-effect-free operands). crap4js has no YAML config, so gate
+side-effect-free operands), and `collapsible-flow` adopts it because
+every one of its findings is correct code — the gate trades flatness,
+not bugs. crap4js has no YAML config, so gate
 options are CLI flags.
 The ignore-comment suppression system IS ported (crap4dart 8abb64c,
 `ignore_filter.dart`) with its per-gate `ignorable` opt-in hard-coded —
@@ -542,7 +545,7 @@ Ignorable mapping (upstream family → crap4js gate):
 
 | crap4js gates | markers honored | upstream families |
 |---|---|---|
-| `banned-imports`, `class-size`, `duplicates`, `identical-branches`, `inline-anon-types`, `magic-constants`, `nesting`, `scattered-constants`, `string-hazards`, `test-assertions`, `unused-code`, `weight-of-class` | line + file | `banned_imports`, `class_size`, `duplication`, `identical_branches`, `inline_record_types`+`record_size`, `magic_constants`, `nesting`, `scattered_constants`, `string_hazards`, `test_assertions`, `unused_code`, `weight_of_class` |
+| `banned-imports`, `class-size`, `collapsible-flow`, `duplicates`, `identical-branches`, `inline-anon-types`, `magic-constants`, `nesting`, `scattered-constants`, `string-hazards`, `test-assertions`, `unused-code`, `weight-of-class` | line + file | `banned_imports`, `class_size`, `collapsible_flow`, `duplication`, `identical_branches`, `inline_record_types`+`record_size`, `magic_constants`, `nesting`, `scattered_constants`, `string_hazards`, `test_assertions`, `unused_code`, `weight_of_class` |
 | `file-naming`, `unused-files` | file only (violations have no line) | `file_naming`, `unused_files` |
 | `folder-structure` | none — violations name directories, which no comment addresses | `folder_structure` |
 | `mutation` | none — its summary carries the pre-aggregated score, which would desync from the filtered violation list | `mutation` |
@@ -1280,6 +1283,63 @@ by syntax), verified duplicate-free. Dogfood: the gate runs on
 crap4js's own `src/` (1520 constructs); one finding, a deliberate
 one-line range (`diffIntersects(..., site.line, site.line)`), carries a
 reason-carrying `// ignore:identical-branches` marker — no real slips.
+
+### collapsible-flow
+
+`crap4js collapsible-flow [--severity warning|error] [paths...]`
+(port of the crap4dart collapsible_flow gate, upstream spec §11.28,
+commit 7bdfd64ae1) flags control-flow nesting that a
+semantics-preserving mechanical rewrite can flatten, resolved from the
+parsed AST only. Every finding is correct code — the gate trades
+flatness, not bugs. Three checks, with the JS host mapping:
+
+1. **Collapsible if** — an `if` without `else` whose then-branch
+   contains only one statement that is itself an `if` without `else`
+   (a block with the single inner `if` equals the naked statement, so
+   both braced and unbraced shapes flag). The two conditions merge
+   into a single `&&` condition; short-circuit evaluation preserves
+   order, so the merge is always equivalent (including `await`ed or
+   side-effecting conditions). JS has no pattern conditions
+   (`if (x case P)` is Dart-only), so upstream's pattern-clause
+   exclusion has no analog here.
+2. **Redundant else** — an `if`/`else` whose then-branch always exits:
+   ends with `return`, `break`, `continue`, or `throw` (JS's `throw`
+   is a statement; Dart's `throw`/`rethrow` expressions map to
+   `ThrowStatement`, and there is no rethrow), a block whose last
+   statement exits, an `if`/`else` pair whose both branches exit, or a
+   `try` whose body exits and whose finally is absent, empty, or
+   exits. The `else` is redundant and its body dedents. An inner `if`
+   without an `else` shall never count as exiting (control falls
+   through when its condition is false — the upstream's own
+   hard-learned trap); `switch` bodies shall not be analyzed (case
+   fall-through), so a trailing `switch` never counts; catch handlers
+   are not analyzed either — body and finalizer decide, like upstream.
+3. **Chain after terminal then** — an `else if` following an
+   always-exiting then-branch, flagged as a flattening hint (guard
+   sequence or dispatch table); the rewrite is not mechanical, so the
+   message shall not promise a specific fix. JS spells `else if` as
+   the if's `alternate` being another `IfStatement` (no distinct node).
+
+Labeled statements and loops are not analyzed either, so they never
+count as exiting (conservative, like upstream). Severity: **warning by
+default** — findings are printed but exit 0; `--severity error` exits
+2 (every finding is correct code, the string-hazards discipline).
+Unknown `--flag=...` and unknown severity values are usage errors
+(exit 1). Violations honor ignore markers (`collapsible-flow` is in
+`IGNORABLE_GATES`); upstream's `enabled`/`ignorable` config keys map to
+the port's conventions: default-on subcommand, hard-coded registry
+entry. Upstream's QualityGatesConfig subgroup refactor is N/A here —
+crap4js has no config file (the port keeps its own flat conventions;
+no subgroup anywhere to refactor). Dogfood: the first self-scan of
+crap4js's own `src/` found three sites and all were fixed in-commit —
+one collapsible if in `duplicates.js` (`collectFunctionLocals`,
+conditions merged) and two redundant else bodies in the
+`profile.js`/`reorder.js` flag parsers (the fallback dedents behind
+the exiting throw, still guarded by the same branch — in a flat
+else-if chain a blind dedent would move the fallback out of the
+chain's else scope and change behavior, which the profile arg tests
+caught during the port). The gate now runs clean on `src/`
+(37 files, 509 if statements checked).
 
 ### not ported from 0.7–0.9 (no crap4js equivalent)
 
