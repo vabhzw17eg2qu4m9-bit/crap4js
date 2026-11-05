@@ -7,20 +7,34 @@
 // intersects the method's [startLine, endLine], count it. covered = statements
 // with s[id] > 0, total = intersecting statements. Result is covered/total, or
 // null when no statements intersect.
+//
+// The lcov tracefile format (.info, what `c8 --reporter=lcov` and Bun emit)
+// is parsed into the SAME shape, so attribution below is format-blind:
+//   SF:<path>        starts a per-file record
+//   DA:<line>,<hits> one statement spanning exactly that line
+//   end_of_record    closes the record
+// Two SF: records for one file sum their hits per line; FN/FNDA/BRDA/LF/LH
+// (function/branch records) are ignored — this gate counts statements only.
+// Relative SF: paths resolve against the project root.
 
 import { UTF8 } from './files.js';
 import { readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 
+// File extension that selects the lcov tracefile parser over Istanbul JSON.
+const LCOV_EXT = '.info';
+
 /**
- * Load an Istanbul coverage JSON file and return a map keyed by project-relative
- * file path. Entries outside the project root are ignored.
+ * Load a coverage report and return a map keyed by project-relative file
+ * path. Entries outside the project root are ignored. Files ending in
+ * `.info` parse as lcov tracefiles, everything else as Istanbul JSON.
  *
- * @param {string} filePath     Absolute or relative path to coverage-final.json.
+ * @param {string} filePath     Absolute or relative path to coverage-final.json or lcov .info.
  * @param {string} projectRoot  Absolute project root used to relativise keys.
  * @returns {Map<string, object>}
  */
 export function loadCoverage(filePath, projectRoot) {
+  if (filePath.endsWith(LCOV_EXT)) return loadLcov(filePath, projectRoot);
   const raw = JSON.parse(readFileSync(filePath, UTF8));
   const canonicalRoot = realpathOrSelf(projectRoot);
   const map = new Map();
@@ -40,6 +54,112 @@ export function loadCoverage(filePath, projectRoot) {
     }
   }
   return map;
+}
+
+/**
+ * Parse an lcov tracefile into the Istanbul-shaped map. One `DA:` record
+ * becomes one single-line statement; duplicate `SF:` records for the same
+ * path sum their hits per line.
+ *
+ * @param {string} filePath     Path to the .info tracefile.
+ * @param {string} projectRoot  Absolute project root used to relativise keys.
+ * @returns {Map<string, object>}
+ */
+function loadLcov(filePath, projectRoot) {
+  const records = parseLcovRecords(filePath);
+  return keyLcovRecords(records, projectRoot);
+}
+
+// SF path (as written) -> Map<line, summed hits> for every record in a
+// tracefile. A repeated SF: path merges into the first record's line set.
+function parseLcovRecords(filePath) {
+  const records = new Map();
+  let record = null;
+  for (const raw of readFileSync(filePath, UTF8).split('\n')) {
+    record = lcovTraceLine(records, record, stripCarriageReturn(raw));
+  }
+  commitLcovRecord(records, record);
+  return records;
+}
+
+// Strips a trailing CR so CRLF tracefiles parse as plain LF.
+function stripCarriageReturn(raw) {
+  return raw.endsWith('\r') ? raw.slice(0, -1) : raw;
+}
+
+// One tracefile line: `SF:` commits the open record and opens the next,
+// `DA:` accumulates a hit, `end_of_record` commits. FN/FNDA/BRDA/LF/LH
+// and unknown records carry no statements and are ignored. Returns the
+// record open after this line (null between records).
+function lcovTraceLine(records, record, line) {
+  if (line.startsWith('SF:')) {
+    commitLcovRecord(records, record);
+    return { path: line.slice(3), lines: new Map() };
+  }
+  if (record === null) return record;
+  if (line.startsWith('DA:')) {
+    addLcovHit(record.lines, line);
+  } else if (line === 'end_of_record') {
+    commitLcovRecord(records, record);
+    record = null;
+  }
+  return record;
+}
+
+function addLcovHit(lines, line) {
+  const match = /^DA:(\d+),(\d+)/.exec(line);
+  if (match === null) throw new Error(`malformed lcov DA record: ${line}`);
+  const lineNo = Number(match[1]);
+  lines.set(lineNo, (lines.get(lineNo) ?? 0) + Number(match[2]));
+}
+
+// Merges a finished record into `records`, summing hits per line when the
+// same SF path appears twice. Always leaves no record open.
+function commitLcovRecord(records, record) {
+  if (record === null) return;
+  const merged = records.get(record.path);
+  if (merged) {
+    for (const [line, hits] of record.lines) merged.set(line, (merged.get(line) ?? 0) + hits);
+  } else {
+    records.set(record.path, record.lines);
+  }
+}
+
+// Keys each summed record with the same spelling logic as the JSON loader:
+// the direct project-relative spelling wins; aliased spellings never
+// displace one that matched literally.
+function keyLcovRecords(records, projectRoot) {
+  const canonicalRoot = realpathOrSelf(projectRoot);
+  const map = new Map();
+  const exact = new Set();
+  for (const [sfPath, fileLines] of records) {
+    const absPath = path.isAbsolute(sfPath) ? sfPath : path.resolve(projectRoot, sfPath);
+    const data = lcovFileCoverage(fileLines);
+    const direct = toProjectRelative(absPath, projectRoot);
+    if (direct !== null) {
+      map.set(direct, data);
+      exact.add(direct);
+      continue;
+    }
+    for (const aliased of throughCanonicalRoot(absPath, canonicalRoot)) {
+      if (!exact.has(aliased)) map.set(aliased, data);
+    }
+  }
+  return map;
+}
+
+// Istanbul file entry equivalent: one single-line statement per DA line,
+// ordered by line number so statement ids are deterministic.
+function lcovFileCoverage(fileLines) {
+  const statementMap = {};
+  const s = {};
+  let id = 0;
+  for (const [line, hits] of [...fileLines].sort((a, b) => a[0] - b[0])) {
+    const key = String(id++);
+    statementMap[key] = { start: { line, column: 0 }, end: { line, column: 0 } };
+    s[key] = hits;
+  }
+  return { statementMap, s };
 }
 
 /**

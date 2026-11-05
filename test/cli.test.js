@@ -279,3 +279,313 @@ test('--metric cognitive feeds the CRAP formula and exits 2', () => {
     rmSync(sourceFile, { force: true });
   }
 });
+
+// --- lcov coverage input (issue #79) ---
+
+test('lcov .info report is byte-identical to the Istanbul JSON report of the same data', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'crap4js-lcoveq-'));
+  try {
+    mkdirSync(path.join(root, 'src'));
+    mkdirSync(path.join(root, 'coverage'));
+    const src = path.join(root, 'src', 'sample.js');
+    cpSync(path.join(FIXTURES, 'sample.js'), src);
+    // One synthetic coverage run: addPositive's statements (lines 5, 6) hit,
+    // identity's (line 12) not — expressed in both formats.
+    const hits = [[5, 1], [6, 1], [12, 0]];
+    const statementMap = {};
+    const s = {};
+    for (const [i, [line, count]] of hits.entries()) {
+      statementMap[String(i)] = { start: { line, column: 0 }, end: { line, column: 0 } };
+      s[String(i)] = count;
+    }
+    writeFileSync(
+      path.join(root, 'coverage', 'coverage-final.json'),
+      JSON.stringify({ [src]: { statementMap, s } }),
+    );
+    writeFileSync(
+      path.join(root, 'coverage', 'lcov.info'),
+      ['TN:', `SF:${src}`, ...hits.map(([l, c]) => `DA:${l},${c}`), 'LF:3', 'LH:2', 'end_of_record', ''].join('\n'),
+    );
+    const istanbul = runCli(root, ['--coverage', 'coverage/coverage-final.json']);
+    const lcov = runCli(root, ['--coverage', 'coverage/lcov.info']);
+    assert.equal(lcov.status, istanbul.status, `stderr: ${lcov.stderr}`);
+    assert.equal(lcov.status, 0);
+    assert.equal(lcov.stdout, istanbul.stdout);
+    assert.equal(lcov.stderr, istanbul.stderr);
+  } finally {
+    cleanup(root);
+  }
+});
+
+// --- --diff-base (issue #79) ---
+
+function git(root, ...args) {
+  const r = spawnSync('git', ['-C', root, ...args], { encoding: 'utf8' });
+  if (r.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.stderr}`);
+  return r.stdout;
+}
+
+function gitProject() {
+  const root = mkdtempSync(path.join(tmpdir(), 'crap4js-git-'));
+  mkdirSync(path.join(root, 'src'));
+  git(root, 'init', '-q');
+  git(root, 'config', 'user.email', 'test@example.com');
+  git(root, 'config', 'user.name', 'test');
+  git(root, 'config', 'commit.gpgsign', 'false');
+  return root;
+}
+
+const BASE_FNS = `function changed() {
+  return 1;
+}
+function deletedOnly() {
+  return 2;
+}
+function untouched() {
+  return 3;
+}
+`;
+const AFTER_FNS = `function changed() {
+  return 11;
+}
+function deletedOnly() {
+}
+function untouched() {
+  return 3;
+}
+`;
+
+test('--diff-base keeps only the functions with an added/changed line', () => {
+  const root = gitProject();
+  try {
+    const src = path.join(root, 'src', 'fns.js');
+    writeFileSync(src, BASE_FNS);
+    git(root, 'add', '.');
+    git(root, 'commit', '-qm', 'base');
+    writeFileSync(src, AFTER_FNS);
+    const r = runCli(root, ['--diff-base', 'HEAD']);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.match(r.stdout, /\bchanged\b/);
+    // The deleted-lines-only function and the untouched one are dropped.
+    assert.doesNotMatch(r.stdout, /deletedOnly/);
+    assert.doesNotMatch(r.stdout, /untouched/);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('--diff-base selects renamed files under the new path', () => {
+  const root = gitProject();
+  try {
+    writeFileSync(path.join(root, 'src', 'old.js'), 'function alpha() {\n  return 1;\n}\n');
+    git(root, 'add', '.');
+    git(root, 'commit', '-qm', 'base');
+    git(root, 'mv', 'src/old.js', 'src/new.js');
+    writeFileSync(path.join(root, 'src', 'new.js'), 'function alpha() {\n  return 100;\n}\n');
+    const r = runCli(root, ['--diff-base', 'HEAD']);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.match(r.stdout, /alpha\s+src\/new\.js/);
+    assert.doesNotMatch(r.stdout, /src\/old\.js/);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('--diff-base with explicit paths scopes the diff to those paths', () => {
+  const root = gitProject();
+  try {
+    writeFileSync(path.join(root, 'src', 'a.js'), 'function fnA() {\n  return 1;\n}\n');
+    writeFileSync(path.join(root, 'src', 'b.js'), 'function fnB() {\n  return 2;\n}\n');
+    git(root, 'add', '.');
+    git(root, 'commit', '-qm', 'base');
+    writeFileSync(path.join(root, 'src', 'a.js'), 'function fnA() {\n  return 11;\n}\n');
+    writeFileSync(path.join(root, 'src', 'b.js'), 'function fnB() {\n  return 22;\n}\n');
+    const r = runCli(root, ['--diff-base', 'HEAD', 'src/a.js']);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.match(r.stdout, /fnA/);
+    assert.doesNotMatch(r.stdout, /fnB/);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('--diff-base run that touches no function reports the empty selection and exits 0', () => {
+  const root = gitProject();
+  try {
+    const src = path.join(root, 'src', 'tail.js');
+    writeFileSync(src, 'function stay() {\n  return 1;\n}\nconst tail = 4;\n');
+    git(root, 'add', '.');
+    git(root, 'commit', '-qm', 'base');
+    writeFileSync(src, 'function stay() {\n  return 1;\n}\nconst tail = 5;\n');
+    const r = runCli(root, ['--diff-base', 'HEAD']);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.match(r.stdout, /No JavaScript files to analyze\./);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('--diff-base with an unknown ref exits 1', () => {
+  const root = gitProject();
+  try {
+    writeFileSync(path.join(root, 'src', 'a.js'), 'export const a = 1;\n');
+    git(root, 'add', '.');
+    git(root, 'commit', '-qm', 'base');
+    const r = runCli(root, ['--diff-base', 'no-such-ref']);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /git diff no-such-ref failed/);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('--diff-base combined with --changed exits 1', () => {
+  const r = runCli(process.cwd(), ['--diff-base', 'HEAD', '--changed']);
+  assert.equal(r.status, 1);
+});
+
+// --- --strict (issue #79) ---
+
+function strictProject({ coverageContent, coverageName = 'coverage-final.json' }) {
+  const root = mkdtempSync(path.join(tmpdir(), 'crap4js-strict-'));
+  mkdirSync(path.join(root, 'src'));
+  mkdirSync(path.join(root, 'coverage'));
+  cpSync(path.join(FIXTURES, 'sample.js'), path.join(root, 'src', 'sample.js'));
+  if (coverageContent !== undefined) {
+    writeFileSync(path.join(root, 'coverage', coverageName), coverageContent);
+  }
+  return root;
+}
+
+test('--strict exits 1 when the coverage file is missing', () => {
+  const root = strictProject({});
+  try {
+    const r = runCli(root, ['--strict']);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /coverage file not found/);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('--strict exits 1 on an lcov file with zero records', () => {
+  const root = strictProject({ coverageContent: 'TN:\n', coverageName: 'lcov.info' });
+  try {
+    const r = runCli(root, ['--strict', '--coverage', 'coverage/lcov.info']);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /no records/);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('--strict exits 1 on a coverage parse failure', () => {
+  const root = strictProject({
+    coverageContent: 'TN:\nSF:src/sample.js\nDA:oops\nend_of_record\n',
+    coverageName: 'lcov.info',
+  });
+  try {
+    const r = runCli(root, ['--strict', '--coverage', 'coverage/lcov.info']);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /failed to parse coverage file/);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('--strict exits 1 on an explicit path that does not exist', () => {
+  const root = strictProject({});
+  try {
+    const r = runCli(root, ['--strict', 'src/nope.js']);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /path does not exist: src\/nope\.js/);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('--strict scores a selected file with no coverage entry as 0.0% covered', () => {
+  const root = strictProject({});
+  try {
+    // b.js has no coverage entry; a.js's entry covers addPositive fully.
+    writeFileSync(path.join(root, 'src', 'b.js'), 'function tiny(a) {\n  return a;\n}\n');
+    const src = path.join(root, 'src', 'sample.js');
+    const statementMap = {
+      '0': { start: { line: 5, column: 0 }, end: { line: 5, column: 0 } },
+      '1': { start: { line: 6, column: 0 }, end: { line: 6, column: 0 } },
+    };
+    writeFileSync(
+      path.join(root, 'coverage', 'coverage-final.json'),
+      JSON.stringify({ [src]: { statementMap, s: { '0': 1, '1': 1 } } }),
+    );
+    const r = runCli(root, ['--strict']);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    // tiny: CC=1, coverage=0 -> CRAP 2.0 as a computed row (not N/A).
+    assert.match(r.stdout, /tiny\s+src\/b\.js\s+1\s+0\.0%\s+2\.0/);
+    assert.match(r.stdout, /addPositive\s+src\/sample\.js\s+2\s+100\.0%\s+2\.0/);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('--strict keeps N/A for statement-less functions in files with coverage entries', () => {
+  const root = strictProject({});
+  try {
+    const src = path.join(root, 'src', 'sample.js');
+    writeFileSync(
+      src,
+      'function real() {\n  return 1;\n}\nfunction hollow() {}\n',
+    );
+    writeFileSync(
+      path.join(root, 'coverage', 'coverage-final.json'),
+      JSON.stringify({
+        [src]: {
+          statementMap: { '0': { start: { line: 2, column: 0 }, end: { line: 2, column: 0 } } },
+          s: { '0': 1 },
+        },
+      }),
+    );
+    const r = runCli(root, ['--strict']);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.match(r.stdout, /real\s+src\/sample\.js\s+1\s+100\.0%\s+1\.0/);
+    assert.match(r.stdout, /hollow\s+src\/sample\.js\s+1\s+N\/A\s+N\/A/);
+  } finally {
+    cleanup(root);
+  }
+});
+
+// --- --exclude (issue #79) ---
+
+test('--exclude drops files matching the project-relative glob (repeatable)', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'crap4js-exclude-'));
+  try {
+    mkdirSync(path.join(root, 'src'));
+    mkdirSync(path.join(root, 'coverage'));
+    const src = path.join(root, 'src', 'sample.js');
+    const high = path.join(root, 'src', 'high_crap.js');
+    cpSync(path.join(FIXTURES, 'sample.js'), src);
+    cpSync(path.join(FIXTURES, 'high_crap.js'), high);
+    writeFileSync(
+      path.join(root, 'coverage', 'coverage-final.json'),
+      JSON.stringify({
+        [src]: {
+          statementMap: { '0': { start: { line: 5, column: 0 }, end: { line: 6, column: 0 } } },
+          s: { '0': 1 },
+        },
+        [high]: {
+          statementMap: { '0': { start: { line: 9, column: 0 }, end: { line: 14, column: 0 } } },
+          s: { '0': 0 },
+        },
+      }),
+    );
+    const excluded = runCli(root, ['--exclude', 'src/high*']);
+    assert.equal(excluded.status, 0, `stderr: ${excluded.stderr}`);
+    assert.match(excluded.stdout, /addPositive/);
+    assert.doesNotMatch(excluded.stdout, /deepNested/);
+    const both = runCli(root, ['--exclude', 'src/high_crap.js', '--exclude', 'src/sample.js']);
+    assert.equal(both.status, 0, `stderr: ${both.stderr}`);
+    assert.match(both.stdout, /No JavaScript files to analyze\./);
+  } finally {
+    cleanup(root);
+  }
+});
