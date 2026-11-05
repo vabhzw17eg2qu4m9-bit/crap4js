@@ -53,6 +53,20 @@ crap4js --changed        Analyze git-changed source files under src/.
 crap4js <path>...        Analyze explicit files / directories (expanded).
 crap4js --help           Print this help and exit 0.
 crap4js --coverage <p>   Override coverage file (default: coverage/coverage-final.json).
+                         A path ending in .info parses as an lcov tracefile
+                         (what c8/Bun emit) instead of Istanbul JSON.
+crap4js --diff-base REF  Analyze only the functions intersecting lines
+                         added/changed vs git ref REF (renames use the new
+                         path; explicit paths scope the diff; mutually
+                         exclusive with --changed).
+crap4js --strict         Fail (exit 1) on a missing/unreadable/unparseable
+                         coverage file or zero coverage records, and on an
+                         explicit path that does not exist; selected files
+                         with no coverage entry count as 0.0% covered
+                         instead of N/A.
+crap4js --exclude GLOB   Skip files whose project-relative path matches
+                         GLOB (repeatable, same glob rules as the gate
+                         subcommands).
 crap4js --threshold <n>  Override CRAP threshold (default: 8.0).
 crap4js --metric <m>     Complexity metric: cyclomatic (default) or cognitive;
                          the chosen value feeds the CRAP formula.
@@ -164,8 +178,8 @@ crap4js non-null-assertion [--severity warning|error] [paths...]
 crap4js skill            Print the crap4js profiling skill for AI agents.
 ```
 
-`--changed` is mutually exclusive with explicit paths. Unknown flags are a
-usage error.
+`--changed` is mutually exclusive with explicit paths, and `--diff-base` is
+mutually exclusive with `--changed`. Unknown flags are a usage error.
 
 The gate-check subcommands (`file-naming`, `nesting`, `class-size`,
 `weight-of-class`, `unused-code`, `unused-files`, `banned-imports`,
@@ -209,7 +223,7 @@ Max CRAP: 30.0 (threshold 8.0) — FAILED
 | Code | Meaning                                                                       |
 |------|-------------------------------------------------------------------------------|
 | `0`  | Success (empty selection, or max numeric CRAP ≤ threshold).                   |
-| `1`  | CLI usage error (bad flag, bad threshold value, `--changed` + paths, etc.).   |
+| `1`  | CLI usage error (bad flag, bad threshold value, `--changed` + paths, `--diff-base` + `--changed`, unknown git ref, or — under `--strict` — missing/unparseable/empty coverage or a missing explicit path). |
 | `2`  | CRAP threshold exceeded (max numeric CRAP > threshold).                       |
 
 ## Coverage format
@@ -235,9 +249,41 @@ the method's coverage and CRAP are `N/A`. Absolute file-path keys are
 relativised against the project root; entries outside the project root are
 ignored.
 
+An `--coverage` path ending in `.info` is parsed as an **lcov tracefile**
+(the format `npx c8 --reporter=lcov` and `bun test --coverage` emit), so CI
+setups that produce only lcov work without conversion. Each `DA:<line>,<hits>`
+record becomes one single-line statement; two `SF:` records for the same file
+sum their hits per line; function/branch records (`FN`, `FNDA`, `BRDA`, `LF`,
+`LH`) are ignored. Relative `SF:` paths resolve against the project root,
+absolute paths use the same relativisation as the JSON keys above. The
+resulting per-file data is identical in shape to the Istanbul JSON, so
+reports produced from either format of the same coverage run are
+byte-identical.
+
 If the coverage file is missing, a warning is printed to stderr (including
 the command to generate it — `npx c8 --reporter=json node --test`) and every
-method is reported with `N/A` coverage and CRAP.
+method is reported with `N/A` coverage and CRAP. Under `--strict` these
+fail-open degradations become errors (exit 1) instead, and a selected file
+with no coverage entry is scored as 0.0% covered rather than `N/A`.
+
+## `--diff-base`
+
+`crap4js --diff-base REF` scopes the CRAP report to the change under review:
+it runs `git diff --unified=0 REF -- <paths>` and keeps only the functions
+whose `[startLine, endLine]` intersects an added or changed line (the same
+plumbing the `mutation` gate uses). Renames select under the new path; a
+function whose lines were only deleted is dropped. It combines with explicit
+paths (they scope the diff) but not with `--changed` (usage error, exit 1);
+an unknown ref or any git failure exits 1; when the selection keeps no
+function at all, the usual "No JavaScript files to analyze." empty report is
+printed and the run exits 0.
+
+## `--exclude`
+
+`crap4js --exclude GLOB` (repeatable) removes files from the analysis before
+any parsing: a file is skipped when its project-relative path matches GLOB,
+using the same glob rules as the gate subcommands (`*` within one path
+segment, `**` across segments, `?` one character).
 
 ## `--run-tests`
 

@@ -9,25 +9,32 @@
 //   crapScore: number|null
 // }
 
-import { UTF8 } from './files.js';
+import { UTF8, toRelPath } from './files.js';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { extractMethods } from './complexity.js';
 import { loadCoverage, coverageForMethod } from './coverage.js';
+import { diffIntersects } from './diffLines.js';
 import { crapScore } from './crapScore.js';
 
 /**
  * Analyze a set of source files, combining complexity and coverage.
  *
- * @param {{ filePaths: string[], coveragePath: string|null, projectRoot: string, metric?: string }} opts
+ * @param {{ filePaths: string[], coveragePath: string|null, projectRoot: string, metric?: string, strict?: boolean, diffLines?: Map<string, Set<number>> }} opts
  *   `metric` selects the complexity scoring: `cyclomatic` (default) or
  *   `cognitive` (SonarSource v1.2); the chosen value feeds the CRAP formula.
+ *   `strict` turns the coverage fail-open warnings into thrown errors and
+ *   treats a selected file with no coverage entry as 0.0% covered.
+ *   `diffLines` (a parseDiffLineMap result) restricts the report to the
+ *   functions whose line range intersects an added/changed line; files with
+ *   no intersecting function contribute nothing.
  * @returns {{ metrics: Array<object>, parseFailures: string[] }}
  *   Sorted MethodMetric array plus relative paths of files that failed to parse.
  */
-export function analyze({ filePaths, coveragePath, projectRoot, metric }) {
+export function analyze({ filePaths, coveragePath, projectRoot, metric, strict, diffLines }) {
   const warn = (msg) => process.stderr.write(`Warning: ${msg}\n`);
-  const coverageMap = loadCoverageMap(coveragePath, projectRoot, warn);
+  const coverageMap = loadCoverageMap(coveragePath, projectRoot, warn, strict);
+  const fileOpts = { metric, strict, diffLines };
 
   const metrics = [];
   const parseFailures = [];
@@ -37,7 +44,7 @@ export function analyze({ filePaths, coveragePath, projectRoot, metric }) {
       projectRoot,
       coverageMap,
       warn,
-      metric,
+      fileOpts,
     );
     metrics.push(...fileMetrics);
     parseFailures.push(...failures);
@@ -47,38 +54,66 @@ export function analyze({ filePaths, coveragePath, projectRoot, metric }) {
   return { metrics, parseFailures };
 }
 
-function loadCoverageMap(coveragePath, projectRoot, warn) {
+function loadCoverageMap(coveragePath, projectRoot, warn, strict) {
   if (!coveragePath) return null;
   if (!existsSync(coveragePath)) {
-    warn(
+    return failCoverage(
+      strict,
+      warn,
       `coverage file not found at ${coveragePath}. Coverage will be N/A. ` +
         'Generate it with `npx c8 --reporter=json node --test`.',
     );
-    return null;
   }
+  let map;
   try {
-    return loadCoverage(coveragePath, projectRoot);
+    map = loadCoverage(coveragePath, projectRoot);
   } catch (e) {
-    warn(`failed to parse coverage file ${coveragePath}: ${e.message}`);
-    return null;
+    return failCoverage(strict, warn, `failed to parse coverage file ${coveragePath}: ${e.message}`);
   }
+  if (strict && map.size === 0) {
+    throw new Error(`coverage file has no records for this project: ${coveragePath}`);
+  }
+  return map;
 }
 
-function analyzeFile(file, projectRoot, coverageMap, warn, metric) {
-  const rel = path.relative(projectRoot, file).split(path.sep).join('/');
+// In strict mode a coverage problem is a gate failure (the caller's tryStep
+// turns the throw into exit 1); otherwise it degrades to a warning.
+function failCoverage(strict, warn, message) {
+  if (strict) throw new Error(message);
+  warn(message);
+  return null;
+}
+
+// Diff-scoped runs keep only the functions whose line range intersects an
+// added/changed line; a file whose functions all miss the diff selects
+// nothing (null), so it contributes no metrics at all.
+function inDiffSelection(diffLines, rel, methods) {
+  if (!diffLines) return methods;
+  const selected = methods.filter((m) => diffIntersects(diffLines, rel, m.startLine, m.endLine));
+  return selected.length === 0 ? null : selected;
+}
+
+function analyzeFile(file, projectRoot, coverageMap, warn, opts) {
+  const rel = toRelPath(file, projectRoot);
   let methods;
   try {
     methods = extractMethods(readFileSync(file, UTF8), {
       ext: path.extname(file),
-      metric,
+      metric: opts.metric,
     });
   } catch (e) {
     warn(`failed to parse ${rel}: ${e.message}`);
     return { metrics: [], failures: [rel] };
   }
+  methods = inDiffSelection(opts.diffLines, rel, methods);
+  if (methods === null) return { metrics: [], failures: [] };
   const fileCoverage = coverageMap ? coverageMap.get(rel) : null;
+  // Strict + no entry for a selected file: every function counts as 0.0%
+  // covered (CRAP computed) instead of N/A. A file WITH an entry keeps the
+  // no-intersecting-statements N/A for type-only functions.
+  const uncovered = opts.strict && coverageMap && !coverageMap.has(rel);
   const metrics = methods.map((m) => {
-    const coverage = coverageForMethod(fileCoverage, m.startLine, m.endLine);
+    const coverage = uncovered ? 0 : coverageForMethod(fileCoverage, m.startLine, m.endLine);
     return {
       methodName: m.name,
       file: rel,

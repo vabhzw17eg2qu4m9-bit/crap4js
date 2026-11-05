@@ -254,3 +254,134 @@ test('statements with a null line boundary are never intersecting', () => {
   // skipped by the guard, not scored as an uncovered intersecting statement.
   assert.equal(coverageForMethod(fileCoverage, 1, 10), 1);
 });
+
+// --- lcov tracefiles (.info): same Map shape as the Istanbul JSON loader ---
+
+function lcovProject() {
+  const dir = mkdtempSync(path.join(tmpdir(), 'crap4js-lcov-'));
+  mkdirSync(path.join(dir, 'src'));
+  writeFileSync(path.join(dir, 'src', 'a.js'), 'export const a = 1;\nexport const b = 2;\n');
+  return dir;
+}
+
+function writeLcov(dir, records, name = 'lcov.info', eol = '\n') {
+  const infoPath = path.join(dir, name);
+  writeFileSync(infoPath, records.join(eol) + eol);
+  return infoPath;
+}
+
+test('loadCoverage parses an lcov .info into the Istanbul statement shape', () => {
+  const dir = lcovProject();
+  try {
+    const info = writeLcov(dir, [
+      'TN:',
+      `SF:${path.join(dir, 'src', 'a.js')}`,
+      'FN:1,(anonymous_0)',
+      'FNDA:3,(anonymous_0)',
+      'DA:1,5',
+      'DA:2,0',
+      'LF:2',
+      'LH:1',
+      'BRDA:1,0,0,3',
+      'BRDA:1,0,1,0',
+      'end_of_record',
+    ]);
+    const data = loadCoverage(info, dir).get('src/a.js');
+    assert.deepEqual(data.statementMap, {
+      '0': { start: { line: 1, column: 0 }, end: { line: 1, column: 0 } },
+      '1': { start: { line: 2, column: 0 }, end: { line: 2, column: 0 } },
+    });
+    assert.deepEqual(data.s, { '0': 5, '1': 0 });
+    // FN/FNDA/BRDA/LF/LH/BRF/BRH carry no statements: exactly 2 of 3 records' lines.
+    assert.equal(coverageForMethod(data, 1, 2), 1 / 2);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('two SF records for one file sum their hits per line', () => {
+  const dir = lcovProject();
+  try {
+    const sf = `SF:${path.join(dir, 'src', 'a.js')}`;
+    const info = writeLcov(dir, [
+      'TN:',
+      sf,
+      'DA:1,2',
+      'DA:2,0',
+      'end_of_record',
+      sf,
+      'DA:1,1',
+      'DA:2,4',
+      'end_of_record',
+    ]);
+    assert.deepEqual(loadCoverage(info, dir).get('src/a.js').s, { '0': 3, '1': 4 });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CRLF lcov tracefiles parse', () => {
+  const dir = lcovProject();
+  try {
+    const info = writeLcov(
+      dir,
+      ['TN:', `SF:${path.join(dir, 'src', 'a.js')}`, 'DA:1,7', 'end_of_record'],
+      'lcov.info',
+      '\r\n',
+    );
+    assert.deepEqual(loadCoverage(info, dir).get('src/a.js').s, { '0': 7 });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('relative SF paths resolve against the project root', () => {
+  const dir = lcovProject();
+  try {
+    const info = writeLcov(dir, ['TN:', 'SF:src/a.js', 'DA:2,1', 'end_of_record']);
+    assert.deepEqual([...loadCoverage(info, dir).keys()], ['src/a.js']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('lcov records for files outside the project root are dropped', () => {
+  const dir = lcovProject();
+  try {
+    const info = writeLcov(dir, [
+      'TN:',
+      `SF:${path.join(dir, 'src', 'a.js')}`,
+      'DA:1,1',
+      'end_of_record',
+      'SF:/elsewhere/lib/b.js',
+      'DA:1,9',
+      'end_of_record',
+    ]);
+    const map = loadCoverage(info, dir);
+    assert.deepEqual([...map.keys()], ['src/a.js']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a malformed DA record is a parse error, not a silent skip', () => {
+  const dir = lcovProject();
+  try {
+    const info = writeLcov(dir, ['TN:', 'SF:src/a.js', 'DA:oops', 'end_of_record']);
+    assert.throws(() => loadCoverage(info, dir), /malformed lcov DA record: DA:oops/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a DA line outside every function counts for no function', () => {
+  const dir = lcovProject();
+  try {
+    const info = writeLcov(dir, ['TN:', 'SF:src/a.js', 'DA:5,3', 'end_of_record']);
+    const data = loadCoverage(info, dir).get('src/a.js');
+    assert.equal(coverageForMethod(data, 1, 3), null);
+    assert.equal(coverageForMethod(data, 6, 9), null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

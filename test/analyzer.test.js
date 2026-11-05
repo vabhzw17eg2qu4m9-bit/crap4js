@@ -174,3 +174,93 @@ test('compareMetrics: equal CRAP tie-breaks by file, then startLine', () => {
   assert.equal(compareMetrics(line1, line2), -1);
   assert.equal(compareMetrics(line2, line1), 1);
 });
+
+// --- strict mode + diff-scoped selection (issue #79) ---
+
+test('analyze strict throws on a missing coverage file', () => {
+  const { root } = setupProject();
+  assert.throws(
+    () =>
+      analyze({
+        filePaths: [path.join(root, 'src', 'sample.js')],
+        coveragePath: path.join(root, 'coverage', 'missing.json'),
+        projectRoot: root,
+        strict: true,
+      }),
+    /coverage file not found/,
+  );
+});
+
+test('analyze strict scores files without a coverage entry as 0.0% covered', () => {
+  const { root, sourceFile } = setupProject();
+  const otherFile = path.join(root, 'src', 'other.js');
+  writeFileSync(otherFile, 'export function tiny(a) {\n  return a;\n}\n');
+  const { metrics } = analyze({
+    filePaths: [sourceFile, otherFile],
+    coveragePath: path.join(root, 'coverage', 'coverage-final.json'),
+    projectRoot: root,
+    strict: true,
+  });
+  const other = metrics.find((m) => m.file === 'src/other.js');
+  // CC=1, coverage=0 -> 1^2 * 1^3 + 1 = 2.0 (computed, not N/A).
+  assert.equal(other.coverage, 0);
+  assert.equal(other.crapScore, 2.0);
+  // The covered file is untouched by strict mode.
+  assert.equal(metrics.find((m) => m.file === 'src/sample.js').coverage, 1);
+});
+
+test('analyze strict keeps N/A for statement-less functions in covered files', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'crap4js-analyzer-'));
+  mkdirSync(path.join(root, 'src'));
+  mkdirSync(path.join(root, 'coverage'));
+  const sourceFile = path.join(root, 'src', 'only.js');
+  writeFileSync(sourceFile, 'export function real() {\n  return 1;\n}\nexport function hollow() {}\n');
+  const coverage = {
+    [sourceFile]: {
+      statementMap: { '0': { start: { line: 2, column: 0 }, end: { line: 2, column: 12 } } },
+      s: { '0': 1 },
+    },
+  };
+  writeFileSync(path.join(root, 'coverage', 'coverage-final.json'), JSON.stringify(coverage));
+  const { metrics } = analyze({
+    filePaths: [sourceFile],
+    coveragePath: path.join(root, 'coverage', 'coverage-final.json'),
+    projectRoot: root,
+    strict: true,
+  });
+  assert.deepEqual(
+    metrics.map((m) => [m.methodName, m.coverage]),
+    [['real', 1], ['hollow', null]],
+  );
+});
+
+test('analyze with diffLines reports only functions intersecting changed lines', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'crap4js-analyzer-'));
+  mkdirSync(path.join(root, 'src'));
+  const sourceFile = path.join(root, 'src', 'two.js');
+  writeFileSync(sourceFile, 'function first() {\n  return 1;\n}\nfunction second() {\n  return 2;\n}\n');
+  const diff = new Map([['src/two.js', new Set([5])]]);
+  const { metrics } = analyze({
+    filePaths: [sourceFile],
+    coveragePath: null,
+    projectRoot: root,
+    diffLines: diff,
+  });
+  assert.deepEqual(metrics.map((m) => m.methodName), ['second']);
+});
+
+test('analyze with diffLines drops files with no intersecting functions', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'crap4js-analyzer-'));
+  mkdirSync(path.join(root, 'src'));
+  const sourceFile = path.join(root, 'src', 'two.js');
+  writeFileSync(sourceFile, 'function first() {\n  return 1;\n}\nfunction second() {\n  return 2;\n}\n');
+  const diff = new Map([['src/two.js', new Set([99])]]);
+  const { metrics, parseFailures } = analyze({
+    filePaths: [sourceFile],
+    coveragePath: null,
+    projectRoot: root,
+    diffLines: diff,
+  });
+  assert.deepEqual(metrics, []);
+  assert.deepEqual(parseFailures, []);
+});

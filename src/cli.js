@@ -6,10 +6,15 @@
 //   crap4js --changed        Analyze git-changed files under src/.
 //   crap4js <path>...        Analyze explicit files / directories.
 //   crap4js --help           Print this help and exit 0.
-//   crap4js --coverage <p>   Override coverage file (default coverage/coverage-final.json).
+//   crap4js --coverage <p>   Override coverage file (default coverage/coverage-final.json);
+//                            a path ending in .info parses as an lcov tracefile.
 //   crap4js --threshold <n>  Override CRAP threshold (default 8.0).
 //   crap4js --metric <m>     Complexity metric: cyclomatic (default) | cognitive.
 //   crap4js --run-tests      Run `nyc node --test` before analyzing.
+//   crap4js --diff-base REF  Analyze only functions touched by the diff vs REF.
+//   crap4js --strict         Fail on missing/unparseable/empty coverage and
+//                            missing explicit paths; no-entry files are 0.0%.
+//   crap4js --exclude GLOB   Skip files matching GLOB (project-relative, repeatable).
 //   crap4js profile [...]    Run instrumented tests and report per-function timing.
 //   crap4js file-naming [...]  Flag mechanical file names (generic/numeric stems).
 //   crap4js nesting [...]    Fail functions nested deeper than 5 levels.
@@ -88,9 +93,12 @@
 // or gate-check violations.
 
 import path from 'node:path';
+import { existsSync } from 'node:fs';
 import { analyze } from './analyzer.js';
 import { formatReport } from './report.js';
-import { changedFiles, expandPaths, findSourceFiles } from './files.js';
+import { changedFiles, expandPaths, findSourceFiles, toRelPath } from './files.js';
+import { gitChangedLines } from './diffLines.js';
+import { globToRegExp } from './bannedImports.js';
 import { runTests } from './runtests.js';
 import { runFileNaming } from './fileNaming.js';
 import { runNesting } from './nesting.js';
@@ -117,7 +125,7 @@ import { runMemory } from './memory.js';
 import { runSkill } from './skill.js';
 import { isMain } from './mainGuard.js';
 import { COGNITIVE } from './complexity.js';
-import { COVERAGE, DEFAULT_COVERAGE, THRESHOLD_FLAG } from './constants.js';
+import { COVERAGE, DEFAULT_COVERAGE, EXCLUDE, THRESHOLD_FLAG } from './constants.js';
 
 const DEFAULT_THRESHOLD = 8.0;
 const METRICS = new Set(['cyclomatic', COGNITIVE]);
@@ -134,6 +142,18 @@ function usage() {
     '  crap4js --metric <m>     Complexity metric: cyclomatic (default) or cognitive;',
     '                           the chosen value feeds the CRAP formula',
     '  crap4js --run-tests      Run the test+coverage suite before analyzing',
+    '  crap4js --coverage <p>   A path ending in .info parses as an lcov',
+    '                           tracefile instead of Istanbul JSON',
+    '  crap4js --diff-base REF  Analyze only the functions intersecting lines',
+    '                           added/changed vs git ref REF (renames use the',
+    '                           new path; explicit paths scope the diff;',
+    '                           mutually exclusive with --changed)',
+    '  crap4js --strict         Fail (exit 1) on a missing/unreadable/unparseable',
+    '                           coverage file or zero coverage records, and on',
+    '                           an explicit path that does not exist; selected',
+    '                           files with no coverage entry count as 0.0%',
+    '  crap4js --exclude GLOB   Skip files whose project-relative path matches',
+    '                           GLOB (repeatable)',
     '  crap4js profile [--name <p>] [--threshold <ms>] [--top <N>] [paths...]',
     '                           Run instrumented tests and report per-function timing',
     '  crap4js file-naming [paths...]',
@@ -289,6 +309,7 @@ const SIMPLE_FLAGS = {
   '-h': 'help',
   '--changed': 'changed',
   '--run-tests': 'runTests',
+  '--strict': 'strict',
 };
 
 function parseArgs(argv) {
@@ -311,6 +332,9 @@ function newOpts() {
     threshold: undefined,
     metric: undefined,
     runTests: false,
+    diffBase: undefined,
+    strict: false,
+    exclude: [],
   };
 }
 
@@ -324,6 +348,8 @@ function applyArg(opts, argv, i) {
   if (isFlag(a, '--coverage')) return takeValue(opts, COVERAGE, a, argv, i);
   if (isFlag(a, THRESHOLD_FLAG)) return takeValue(opts, 'threshold', a, argv, i);
   if (isFlag(a, '--metric')) return takeValue(opts, 'metric', a, argv, i);
+  if (isFlag(a, '--diff-base')) return takeValue(opts, 'diffBase', a, argv, i);
+  if (isFlag(a, '--exclude')) return takeValue(opts, EXCLUDE, a, argv, i, true);
   if (a.startsWith('--')) throw new Error(`Unknown flag: ${a}`);
   opts.paths.push(a);
   return i;
@@ -333,21 +359,28 @@ function isFlag(a, flag) {
   return a === flag || a.startsWith(flag + '=');
 }
 
-function takeValue(opts, key, a, argv, i) {
+function takeValue(opts, key, a, argv, i, append = false) {
   const prefix = `--${key}=`;
-  if (a.startsWith(prefix)) {
-    opts[key] = a.slice(prefix.length);
-    return i;
-  }
-  const v = argv[i + 1];
+  const inline = a.startsWith(prefix);
+  const v = inline ? a.slice(prefix.length) : argv[i + 1];
   if (v == null) throw new Error(`--${key} requires a value`);
-  opts[key] = v;
-  return i + 1;
+  if (append) {
+    (opts[key] ??= []).push(v);
+  } else {
+    opts[key] = v;
+  }
+  return inline ? i : i + 1;
 }
 
 function validateOpts(opts) {
   if (opts.changed && opts.paths.length > 0) {
     throw new Error('--changed cannot be combined with explicit paths');
+  }
+  if (opts.diffBase !== undefined && opts.changed) {
+    throw new Error('--diff-base cannot be combined with --changed');
+  }
+  if (opts.diffBase !== undefined && opts.diffBase.trim() === '') {
+    throw new Error('--diff-base requires a non-empty git ref');
   }
 }
 
@@ -405,26 +438,54 @@ function dispatchSubcommand(argv, ctx) {
 
 function runWithOpts(opts, ctx) {
   if (opts.runTests && tryStep(ctx, () => runTests(ctx.cwd)) === FAIL) return 1;
-  const files = tryStep(ctx, () => resolveFiles(opts, ctx.cwd));
-  if (files === FAIL) return 1;
-  if (files.length === 0) {
+  const inputs = resolveRunInputs(opts, ctx);
+  if (inputs === null) return 1;
+  if (inputs.files.length === 0) return 0;
+  const coveragePath = resolveCoveragePath(opts, ctx.cwd);
+  const result = tryStep(ctx, () =>
+    analyze({ filePaths: inputs.files, coveragePath, projectRoot: ctx.cwd, metric: opts.metricValue, strict: opts.strict, diffLines: inputs.diffLines }),
+  );
+  if (result === FAIL) return 1;
+  if (isEmptyDiffSelection(inputs.diffLines, result.metrics)) {
+    // The diff touched no function body in the selection: nothing to analyze.
     ctx.out.write('No JavaScript files to analyze.\n');
     return 0;
   }
-  const coveragePath = resolveCoveragePath(opts, ctx.cwd);
-  const result = tryStep(ctx, () =>
-    analyze({ filePaths: files, coveragePath, projectRoot: ctx.cwd, metric: opts.metricValue }),
-  );
-  if (result === FAIL) return 1;
-  const { metrics, parseFailures } = result;
   ctx.out.write(
-    formatReport(metrics, {
+    formatReport(result.metrics, {
       threshold: opts.thresholdValue,
-      parseFailures,
+      parseFailures: result.parseFailures,
       metric: opts.metricValue,
     }),
   );
-  return reportVerdict(metrics, opts.thresholdValue, ctx);
+  return reportVerdict(result.metrics, opts.thresholdValue, ctx);
+}
+
+// File selection plus the --diff-base changed-line map. Writes the empty
+// selection message itself and returns `files: []`; returns null on failure
+// (the error message is already written). A git failure under --diff-base
+// throws inside tryStep and surfaces as a usage error (exit 1).
+function resolveRunInputs(opts, ctx) {
+  const files = tryStep(ctx, () => resolveFiles(opts, ctx.cwd));
+  if (files === FAIL) return null;
+  if (files.length === 0) {
+    ctx.out.write('No JavaScript files to analyze.\n');
+    return { files: [], diffLines: null };
+  }
+  const diffLines = tryStep(ctx, () => diffLinesFor(opts, files, ctx.cwd));
+  if (diffLines === FAIL) return null;
+  return { files, diffLines };
+}
+
+// Changed-line map for --diff-base runs; null without the flag.
+function diffLinesFor(opts, files, cwd) {
+  if (opts.diffBase === undefined || files.length === 0) return null;
+  return gitChangedLines(opts.diffBase, files.map((f) => toRelPath(f, cwd)), cwd);
+}
+
+// A --diff-base run whose selection kept no function analyzes nothing.
+function isEmptyDiffSelection(diffLines, metrics) {
+  return diffLines !== null && metrics.length === 0;
 }
 
 function resolveCoveragePath(opts, cwd) {
@@ -451,9 +512,22 @@ function tryStep(ctx, fn) {
 }
 
 function resolveFiles(opts, cwd) {
-  if (opts.changed) return changedFiles(cwd);
-  if (opts.paths.length > 0) return expandPaths(opts.paths, cwd);
-  return findSourceFiles(cwd);
+  let files;
+  if (opts.changed) {
+    files = changedFiles(cwd);
+  } else if (opts.paths.length > 0) {
+    if (opts.strict) {
+      for (const p of opts.paths) {
+        if (!existsSync(path.resolve(cwd, p))) throw new Error(`path does not exist: ${p}`);
+      }
+    }
+    files = expandPaths(opts.paths, cwd);
+  } else {
+    files = findSourceFiles(cwd);
+  }
+  if (opts.exclude.length === 0) return files;
+  const globs = opts.exclude.map(globToRegExp);
+  return files.filter((f) => !globs.some((g) => g.test(toRelPath(f, cwd))));
 }
 
 function reportVerdict(metrics, threshold, ctx) {
