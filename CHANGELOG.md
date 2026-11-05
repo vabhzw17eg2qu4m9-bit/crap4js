@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.30.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.29.0...v0.30.0) (2026-11-05)
+
+
+### Features
+
+* **cli:** lcov coverage, --diff-base, --strict, --exclude on the CRAP command ([#79](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/79)) ([#80](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/80)) ([d6a86cb](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/d6a86cba9e95c72e5e2d4baacb55f67e57c50721))
+
 ## [0.29.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.28.0...v0.29.0) (2026-10-30)
 
 
