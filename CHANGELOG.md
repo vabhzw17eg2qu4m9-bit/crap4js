@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.31.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.30.0...v0.31.0) (2026-11-06)
+
+
+### Features
+
+* fail closed when unit-test coverage input is missing, unparseable, or record-free ([#82](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/82)) ([dfaaf02](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/dfaaf0245215cb05efe137205d1ccd909e3cb9d4))
+
 ## [0.30.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.29.0...v0.30.0) (2026-11-05)
 
 
