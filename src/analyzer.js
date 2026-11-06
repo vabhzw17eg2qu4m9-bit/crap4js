@@ -23,8 +23,10 @@ import { crapScore } from './crapScore.js';
  * @param {{ filePaths: string[], coveragePath: string|null, projectRoot: string, metric?: string, strict?: boolean, diffLines?: Map<string, Set<number>> }} opts
  *   `metric` selects the complexity scoring: `cyclomatic` (default) or
  *   `cognitive` (SonarSource v1.2); the chosen value feeds the CRAP formula.
- *   `strict` turns the coverage fail-open warnings into thrown errors and
- *   treats a selected file with no coverage entry as 0.0% covered.
+ *   A coverage input that is missing, unparseable, or contains no records
+ *   throws (fail-closed — a CRAP score without coverage is meaningless).
+ *   `strict` treats a selected file with no coverage entry as 0.0% covered
+ *   instead of N/A.
  *   `diffLines` (a parseDiffLineMap result) restricts the report to the
  *   functions whose line range intersects an added/changed line; files with
  *   no intersecting function contribute nothing.
@@ -33,7 +35,7 @@ import { crapScore } from './crapScore.js';
  */
 export function analyze({ filePaths, coveragePath, projectRoot, metric, strict, diffLines }) {
   const warn = (msg) => process.stderr.write(`Warning: ${msg}\n`);
-  const coverageMap = loadCoverageMap(coveragePath, projectRoot, warn, strict);
+  const coverageMap = loadCoverageMap(coveragePath, projectRoot);
   const fileOpts = { metric, strict, diffLines };
 
   const metrics = [];
@@ -54,34 +56,32 @@ export function analyze({ filePaths, coveragePath, projectRoot, metric, strict, 
   return { metrics, parseFailures };
 }
 
-function loadCoverageMap(coveragePath, projectRoot, warn, strict) {
+function loadCoverageMap(coveragePath, projectRoot) {
+  // null coverage input is the caller opting out (the `profile` subcommand's
+  // coverage-free method inventory); the CRAP command always resolves a path.
   if (!coveragePath) return null;
   if (!existsSync(coveragePath)) {
-    return failCoverage(
-      strict,
-      warn,
-      `coverage file not found at ${coveragePath}. Coverage will be N/A. ` +
-        'Generate it with `npx c8 --reporter=json node --test`.',
-    );
+    throw coverageError(`coverage file not found at ${coveragePath}`);
   }
   let map;
   try {
     map = loadCoverage(coveragePath, projectRoot);
   } catch (e) {
-    return failCoverage(strict, warn, `failed to parse coverage file ${coveragePath}: ${e.message}`);
+    throw coverageError(`failed to parse coverage file ${coveragePath}: ${e.message}`);
   }
-  if (strict && map.size === 0) {
-    throw new Error(`coverage file has no records for this project: ${coveragePath}`);
+  if (map.size === 0) {
+    throw coverageError(`coverage file has no records for this project: ${coveragePath}`);
   }
   return map;
 }
 
-// In strict mode a coverage problem is a gate failure (the caller's tryStep
-// turns the throw into exit 1); otherwise it degrades to a warning.
-function failCoverage(strict, warn, message) {
-  if (strict) throw new Error(message);
-  warn(message);
-  return null;
+// Every coverage-input problem gates the run: the CLI's tryStep turns the
+// throw into exit 1 with the message on stderr and no report. Unit-test
+// coverage is required — a CRAP score without coverage is meaningless.
+function coverageError(message) {
+  return new Error(
+    `${message}. Generate unit-test coverage with \`npx c8 --reporter=json node --test\`.`,
+  );
 }
 
 // Diff-scoped runs keep only the functions whose line range intersects an

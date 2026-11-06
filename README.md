@@ -55,15 +55,18 @@ crap4js --help           Print this help and exit 0.
 crap4js --coverage <p>   Override coverage file (default: coverage/coverage-final.json).
                          A path ending in .info parses as an lcov tracefile
                          (what c8/Bun emit) instead of Istanbul JSON.
+                         A missing, unparseable, or record-free coverage file
+                         fails the run (exit 1): unit-test coverage is
+                         required — a CRAP score without coverage is
+                         meaningless. Generate it with
+                         `npx c8 --reporter=json node --test`.
 crap4js --diff-base REF  Analyze only the functions intersecting lines
                          added/changed vs git ref REF (renames use the new
                          path; explicit paths scope the diff; mutually
                          exclusive with --changed).
-crap4js --strict         Fail (exit 1) on a missing/unreadable/unparseable
-                         coverage file or zero coverage records, and on an
-                         explicit path that does not exist; selected files
-                         with no coverage entry count as 0.0% covered
-                         instead of N/A.
+crap4js --strict         Selected files with no coverage entry count as
+                         0.0% covered instead of N/A, and explicit paths
+                         must exist (exit 1 otherwise).
 crap4js --exclude GLOB   Skip files whose project-relative path matches
                          GLOB (repeatable, same glob rules as the gate
                          subcommands).
@@ -223,7 +226,7 @@ Max CRAP: 30.0 (threshold 8.0) — FAILED
 | Code | Meaning                                                                       |
 |------|-------------------------------------------------------------------------------|
 | `0`  | Success (empty selection, or max numeric CRAP ≤ threshold).                   |
-| `1`  | CLI usage error (bad flag, bad threshold value, `--changed` + paths, `--diff-base` + `--changed`, unknown git ref, or — under `--strict` — missing/unparseable/empty coverage or a missing explicit path). |
+| `1`  | CLI usage error (bad flag, bad threshold value, `--changed` + paths, `--diff-base` + `--changed`, unknown git ref, missing/unparseable/record-free coverage, or — under `--strict` — a missing explicit path). |
 | `2`  | CRAP threshold exceeded (max numeric CRAP > threshold).                       |
 
 ## Coverage format
@@ -260,11 +263,15 @@ resulting per-file data is identical in shape to the Istanbul JSON, so
 reports produced from either format of the same coverage run are
 byte-identical.
 
-If the coverage file is missing, a warning is printed to stderr (including
-the command to generate it — `npx c8 --reporter=json node --test`) and every
-method is reported with `N/A` coverage and CRAP. Under `--strict` these
-fail-open degradations become errors (exit 1) instead, and a selected file
-with no coverage entry is scored as 0.0% covered rather than `N/A`.
+Unit-test coverage is **required**: if the coverage file is missing,
+unparseable, or contains no records for this project, `crap4js` fails with
+exit 1, printing an actionable error to stderr (including the command to
+generate coverage — `npx c8 --reporter=json node --test`) and no report —
+a CRAP score without coverage is meaningless. Breaking change: earlier
+releases degraded to per-method `N/A` rows with a stderr warning and
+exit 0. Under `--strict`, a selected file with no coverage entry is
+additionally scored as 0.0% covered rather than `N/A`, and explicit
+paths must exist.
 
 ## `--diff-base`
 

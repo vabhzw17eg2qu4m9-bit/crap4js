@@ -186,6 +186,19 @@ test('IT-2: CLI through a symlinked directory analyzes a fixture dir', { skip: N
     writeFileSync(path.join(project, 'src', 'a.js'), 'function f() { return 1; }\n');
     const link = path.join(tmp, 'project-link');
     linkDir(project, link);
+    // Coverage is required input; the default coverage path resolves against
+    // cwd (tmp), so the fixture lives there, keyed through the link spelling
+    // to relativize the same way the selected files do.
+    mkdirSync(path.join(tmp, 'coverage'), { recursive: true });
+    writeFileSync(
+      path.join(tmp, 'coverage', 'coverage-final.json'),
+      JSON.stringify({
+        [path.join(link, 'src', 'a.js')]: {
+          statementMap: { '0': { start: { line: 1, column: 0 }, end: { line: 1, column: 0 } } },
+          s: { '0': 1 },
+        },
+      }),
+    );
     const cliLink = path.join(tmp, 'repo-link');
     linkDir(REPO, cliLink);
     const r = runNode([path.join(cliLink, 'src', 'cli.js'), link], {

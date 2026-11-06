@@ -148,7 +148,9 @@ test('fixture with high complexity + zero coverage exits 2', () => {
   }
 });
 
-test('missing coverage file still produces a report with N/A entries', () => {
+// --- fail-closed coverage input (default; promoted from --strict) ---
+
+test('missing coverage file exits 1 with an actionable error and no report', () => {
   const root = mkdtempSync(path.join(tmpdir(), 'crap4js-nocov-'));
   mkdirSync(path.join(root, 'src'));
   try {
@@ -157,10 +159,38 @@ test('missing coverage file still produces a report with N/A entries', () => {
       path.join(root, 'src', 'sample.js'),
     );
     const r = runCli(root, []);
-    assert.equal(r.status, 0);
-    assert.match(r.stdout, /CRAP Report/);
-    assert.match(r.stdout, /N\/A/);
+    assert.equal(r.status, 1);
+    assert.doesNotMatch(r.stdout, /CRAP Report/);
     assert.match(r.stderr, /coverage file not found/);
+    assert.match(r.stderr, /npx c8 --reporter=json node --test/);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('zero-record lcov coverage exits 1 without --strict', () => {
+  const root = strictProject({ coverageContent: 'TN:\n', coverageName: 'lcov.info' });
+  try {
+    const r = runCli(root, ['--coverage', 'coverage/lcov.info']);
+    assert.equal(r.status, 1);
+    assert.doesNotMatch(r.stdout, /CRAP Report/);
+    assert.match(r.stderr, /no records/);
+    assert.match(r.stderr, /npx c8 --reporter=json node --test/);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('unparseable coverage exits 1 without --strict', () => {
+  const root = strictProject({
+    coverageContent: 'TN:\nSF:src/sample.js\nDA:oops\nend_of_record\n',
+    coverageName: 'lcov.info',
+  });
+  try {
+    const r = runCli(root, ['--coverage', 'coverage/lcov.info']);
+    assert.equal(r.status, 1);
+    assert.doesNotMatch(r.stdout, /CRAP Report/);
+    assert.match(r.stderr, /failed to parse coverage file/);
   } finally {
     cleanup(root);
   }
@@ -170,12 +200,23 @@ test('explicit positional path is analyzed', () => {
   const root = mkdtempSync(path.join(tmpdir(), 'crap4js-explicit-'));
   try {
     mkdirSync(path.join(root, 'lib'));
-    cpSync(
-      path.join(FIXTURES, 'sample.js'),
-      path.join(root, 'lib', 'sample.js'),
+    const src = path.join(root, 'lib', 'sample.js');
+    cpSync(path.join(FIXTURES, 'sample.js'), src);
+    mkdirSync(path.join(root, 'coverage'));
+    writeFileSync(
+      path.join(root, 'coverage', 'coverage-final.json'),
+      JSON.stringify({
+        [src]: {
+          statementMap: {
+            '0': { start: { line: 5, column: 0 }, end: { line: 5, column: 0 } },
+            '1': { start: { line: 6, column: 0 }, end: { line: 6, column: 0 } },
+          },
+          s: { '0': 1, '1': 1 },
+        },
+      }),
     );
     const r = runCli(root, ['lib/sample.js']);
-    assert.equal(r.status, 0);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
     assert.match(r.stdout, /addPositive/);
   } finally {
     cleanup(root);
@@ -236,7 +277,20 @@ test('--metric cognitive relabels the complexity column; default stays CC', () =
   const root = mkdtempSync(path.join(tmpdir(), 'crap4js-metric-'));
   try {
     mkdirSync(path.join(root, 'src'));
-    writeFileSync(path.join(root, 'src', 'chain.js'), CHAIN_SRC);
+    const src = path.join(root, 'src', 'chain.js');
+    writeFileSync(src, CHAIN_SRC);
+    mkdirSync(path.join(root, 'coverage'));
+    writeFileSync(
+      path.join(root, 'coverage', 'coverage-final.json'),
+      JSON.stringify({
+        [src]: {
+          statementMap: {
+            '0': { start: { line: 1, column: 0 }, end: { line: 6, column: 0 } },
+          },
+          s: { '0': 1 },
+        },
+      }),
+    );
     const cognitive = runCli(root, ['--metric', 'cognitive', 'src/chain.js']);
     assert.equal(cognitive.status, 0, `stderr: ${cognitive.stderr}`);
     assert.match(cognitive.stdout, /\bCogn\b/);
@@ -332,6 +386,19 @@ function gitProject() {
   git(root, 'config', 'user.email', 'test@example.com');
   git(root, 'config', 'user.name', 'test');
   git(root, 'config', 'commit.gpgsign', 'false');
+  // Coverage is required input for every analyze run; the diff-base tests'
+  // intent is function selection, so a record inside the root suffices
+  // (files without their own entry just report N/A rows).
+  mkdirSync(path.join(root, 'coverage'));
+  writeFileSync(
+    path.join(root, 'coverage', 'coverage-final.json'),
+    JSON.stringify({
+      [path.join(root, 'src', 'placeholder.js')]: {
+        statementMap: { '0': { start: { line: 1, column: 0 }, end: { line: 1, column: 0 } } },
+        s: { '0': 1 },
+      },
+    }),
+  );
   return root;
 }
 
@@ -444,7 +511,10 @@ test('--diff-base combined with --changed exits 1', () => {
   assert.equal(r.status, 1);
 });
 
-// --- --strict (issue #79) ---
+// --- --strict extras (issue #79; the coverage-input gate itself is now default) ---
+
+// Builds a project with optional coverage content; shared by the fail-closed
+// default tests above and the --strict extras below.
 
 function strictProject({ coverageContent, coverageName = 'coverage-final.json' }) {
   const root = mkdtempSync(path.join(tmpdir(), 'crap4js-strict-'));
