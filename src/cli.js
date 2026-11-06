@@ -7,13 +7,16 @@
 //   crap4js <path>...        Analyze explicit files / directories.
 //   crap4js --help           Print this help and exit 0.
 //   crap4js --coverage <p>   Override coverage file (default coverage/coverage-final.json);
-//                            a path ending in .info parses as an lcov tracefile.
+//                            a path ending in .info parses as an lcov tracefile;
+//                            a missing, unparseable, or record-free coverage
+//                            file fails the run (exit 1) — unit-test coverage
+//                            is required.
 //   crap4js --threshold <n>  Override CRAP threshold (default 8.0).
 //   crap4js --metric <m>     Complexity metric: cyclomatic (default) | cognitive.
 //   crap4js --run-tests      Run `nyc node --test` before analyzing.
 //   crap4js --diff-base REF  Analyze only functions touched by the diff vs REF.
-//   crap4js --strict         Fail on missing/unparseable/empty coverage and
-//                            missing explicit paths; no-entry files are 0.0%.
+//   crap4js --strict         Files with no coverage entry are 0.0% covered
+//                            (not N/A); explicit paths must exist.
 //   crap4js --exclude GLOB   Skip files matching GLOB (project-relative, repeatable).
 //   crap4js profile [...]    Run instrumented tests and report per-function timing.
 //   crap4js file-naming [...]  Flag mechanical file names (generic/numeric stems).
@@ -138,6 +141,10 @@ function usage() {
     '  crap4js <path>...        Analyze explicit files / directories (expanded)',
     '  crap4js --help           Print this help message',
     '  crap4js --coverage <p>   Override coverage file (default: ' + DEFAULT_COVERAGE + ')',
+    '                           A missing, unparseable, or record-free coverage',
+    '                           file fails the run (exit 1): unit-test coverage',
+    '                           is required. Generate it with',
+    '                           `npx c8 --reporter=json node --test`',
     '  crap4js --threshold <n>  Override CRAP threshold (default: ' + DEFAULT_THRESHOLD + ')',
     '  crap4js --metric <m>     Complexity metric: cyclomatic (default) or cognitive;',
     '                           the chosen value feeds the CRAP formula',
@@ -148,10 +155,9 @@ function usage() {
     '                           added/changed vs git ref REF (renames use the',
     '                           new path; explicit paths scope the diff;',
     '                           mutually exclusive with --changed)',
-    '  crap4js --strict         Fail (exit 1) on a missing/unreadable/unparseable',
-    '                           coverage file or zero coverage records, and on',
-    '                           an explicit path that does not exist; selected',
-    '                           files with no coverage entry count as 0.0%',
+    '  crap4js --strict         Selected files with no coverage entry count as',
+    '                           0.0% covered instead of N/A, and explicit',
+    '                           paths must exist (exit 1 otherwise)',
     '  crap4js --exclude GLOB   Skip files whose project-relative path matches',
     '                           GLOB (repeatable)',
     '  crap4js profile [--name <p>] [--threshold <ms>] [--top <N>] [paths...]',
