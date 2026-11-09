@@ -249,6 +249,36 @@ test('empty selection reports nothing to check and exits 0', () => {
   }
 });
 
+test('an ignore marker inside the coverage input cannot fake a pass', () => {
+  // Regression for the reviewer's F1: test-coverage's single violation
+  // names the coverage input, so a file-scoped marker in that input's
+  // first lines used to suppress the gate into exit 0. test-coverage is
+  // non-ignorable — the below-minimum ratio still fails.
+  const root = fixture({ 'a.js': 'a\nb\n' });
+  mkdirSync(path.join(root, 'coverage'), { recursive: true });
+  writeFileSync(
+    path.join(root, 'coverage', 'lcov.info'),
+    [
+      '// ignore-file:test-coverage',
+      '// crap:ignore-file',
+      'SF:src/a.js',
+      'DA:1,1',
+      'DA:2,0',
+      'end_of_record',
+      '',
+    ].join('\n'),
+  );
+  try {
+    const ctx = fakeCtx(root);
+    assert.equal(runTestCoverage(['--coverage', 'coverage/lcov.info'], ctx), 2);
+    const printed = ctx.lines.join('');
+    assert.match(printed, /total coverage 50\.0% < min 80\.0%/);
+    assert.match(printed, /coverage 50\.0% < min 80\.0%/);
+  } finally {
+    cleanup(root);
+  }
+});
+
 test('parse: defaults and flags', () => {
   const opts = parseTestCoverageArgs([]);
   assert.equal(opts.minPercent, 80.0);

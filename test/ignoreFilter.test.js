@@ -158,9 +158,13 @@ test('violations without a line only heed file-scoped markers', () => {
 test('suppression never applies to a non-ignorable gate', () => {
   assert.equal(IGNORABLE_GATES.has('similarity'), false);
   assert.equal(IGNORABLE_GATES.has('mutation'), false);
+  // test-coverage is aggregate-only and names the coverage input itself:
+  // a marker inside that input must never fake a pass.
+  assert.equal(IGNORABLE_GATES.has('test-coverage'), false);
   const blanket = 'x = 1; // crap:ignore\n';
   assert.deepEqual(keptLines(blanket, 'similarity', [violation(1)]), [1]);
   assert.deepEqual(keptLines(blanket, 'mutation', [violation(1)]), [1]);
+  assert.deepEqual(keptLines(blanket, 'test-coverage', [violation(1)]), [1]);
   assert.deepEqual(keptLines('x = 1; // ignore:\n', 'profile', [violation(1)]), [1]);
 });
 

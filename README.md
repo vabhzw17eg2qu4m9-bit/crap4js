@@ -1194,10 +1194,13 @@ output and the exit code. Suppression is per-gate opt-in: upstream
 configures it with `ignorable: true` per gate in YAML; crap4js has no
 config file, so the ignorable set is hard-coded — the
 violation-reporting gate subcommands, except `folder-structure` (its
-violations name directories, which no comment can address) and
+violations name directories, which no comment can address),
 `mutation` (its summary carries the pre-aggregated score, which would
-desync from the filtered violation list). Markers never affect
-`profile`, `memory`, `similarity`, `skill`, or the default analyze run.
+desync from the filtered violation list), and `test-coverage` (its
+single violation is an aggregate naming the coverage input itself — a
+marker inside that input would suppress the gate into a false pass).
+Markers never affect `profile`, `memory`, `similarity`, `skill`, or the
+default analyze run.
 
 Legacy blanket markers (upstream 0.5.0 semantics, unchanged):
 
