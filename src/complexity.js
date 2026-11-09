@@ -18,7 +18,10 @@
 
 import { parse } from '@babel/parser';
 import { STRING } from './constants.js';
-import { TS_EXTENSIONS } from './files.js';
+import { UTF8, TS_EXTENSIONS, gateFiles, toRelPath } from './files.js';
+import { applyGateArg, runCheck } from './gateCommon.js';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 
 const COMPLEXITY_TYPES = new Set([
   'IfStatement',
@@ -103,21 +106,23 @@ export function extractMethods(source, { ext, metric } = {}) {
 /**
  * Same walk as extractMethods, but each entry also keeps a reference to the
  * function AST node. Used by the `profile` command's instrumenter to wrap
- * the exact bodies the analyzer reports.
+ * the exact bodies the analyzer reports. `includeConstructors` adds class
+ * constructors as entries (kind `constructor` on the node) — the
+ * method-size gate checks their parameter count only.
  *
  * @param {string} source
- * @param {{ ext?: string }} [opts]
+ * @param {{ ext?: string, includeConstructors?: boolean }} [opts]
  * @returns {Array<{name: string, startLine: number, endLine: number, complexity: number, node: object}>}
  */
-export function extractMethodsWithNodes(source, { ext } = {}) {
-  return parseMethods(source, ext);
+export function extractMethodsWithNodes(source, { ext, includeConstructors } = {}) {
+  return parseMethods(source, ext, undefined, includeConstructors ? SIZE_HANDLERS : undefined);
 }
 
-function parseMethods(source, ext, metric) {
+function parseMethods(source, ext, metric, handlers) {
   const ast = parseSource(source, ext);
   const methods = [];
   // @babel/parser wraps the Program in a File node; the walker starts at Program.
-  walkForEntries(ast.program, null, methods);
+  walkForEntries(ast.program, null, methods, handlers);
   const complexityOf = metric === COGNITIVE ? computeCognitive : computeComplexity;
   for (const m of methods) m.complexity = complexityOf(m.node.body);
   return methods;
@@ -221,23 +226,23 @@ const HANDLERS = {
   },
   ClassDeclaration: classHandler,
   ClassExpression: classHandler,
-  ExportDefaultDeclaration(node, className, methods) {
+  ExportDefaultDeclaration(node, className, methods, handlers) {
     // Walk the declaration inside; the export wrapper is transparent.
-    if (node.declaration) walkForEntries(node.declaration, className, methods);
+    if (node.declaration) walkForEntries(node.declaration, className, methods, handlers);
     return SKIP;
   },
-  ExportNamedDeclaration(node, className, methods) {
-    if (node.declaration) walkForEntries(node.declaration, className, methods);
+  ExportNamedDeclaration(node, className, methods, handlers) {
+    if (node.declaration) walkForEntries(node.declaration, className, methods, handlers);
     return SKIP;
   },
 };
 
-function classHandler(node, className, methods) {
+function classHandler(node, className, methods, handlers) {
   // Class field initialisers (PropertyDefinition) are not methods; the body
   // is the only place method entries live, so we walk it directly with the
   // class's own name as context and skip the generic traversal.
   const cn = node.id?.name ?? className;
-  for (const child of node.body?.body ?? []) walkForEntries(child, cn, methods);
+  for (const child of node.body?.body ?? []) walkForEntries(child, cn, methods, handlers);
   return SKIP;
 }
 
@@ -250,23 +255,39 @@ function classMethodHandler(node, className, methods) {
   methods.push(makeMethod(className ? `${className}.${mn}` : mn, node));
 }
 
-function walkForEntries(node, className, methods) {
-  if (!isNode(node)) return;
-  const handler = HANDLERS[node.type];
-  if (handler?.(node, className, methods) === SKIP) return;
-  visitChildren(node, className, methods);
+// The method-size variant of classMethodHandler: constructors are entries
+// too — that gate checks their parameter count only, everything else about
+// them is identical.
+function sizeClassMethodHandler(node, className, methods) {
+  if (!node.body) return;
+  const mn = keyName(node.key);
+  methods.push(makeMethod(className ? `${className}.${mn}` : mn, node));
 }
 
-function visitChildren(node, className, methods) {
+// Handler table for the size walk: HANDLERS with constructors included.
+const SIZE_HANDLERS = {
+  ...HANDLERS,
+  ClassMethod: sizeClassMethodHandler,
+  ClassPrivateMethod: sizeClassMethodHandler,
+};
+
+function walkForEntries(node, className, methods, handlers = HANDLERS) {
+  if (!isNode(node)) return;
+  const handler = handlers[node.type];
+  if (handler?.(node, className, methods, handlers) === SKIP) return;
+  visitChildren(node, className, methods, handlers);
+}
+
+function visitChildren(node, className, methods, handlers) {
   for (const key of Object.keys(node)) {
     if (SKIP_KEYS.has(key)) continue;
     const v = node[key];
     if (Array.isArray(v)) {
       for (const c of v) {
-        if (isNode(c)) walkForEntries(c, className, methods);
+        if (isNode(c)) walkForEntries(c, className, methods, handlers);
       }
     } else if (isNode(v)) {
-      walkForEntries(v, className, methods);
+      walkForEntries(v, className, methods, handlers);
     }
   }
 }
@@ -437,4 +458,95 @@ export function leftName(node) {
     return `${obj}.${prop}`;
   }
   return ANON;
+}
+
+// ---------- The `complexity` gate ----------
+//
+// Port of crap4dart's complexity gate (with the cognitive-metric option the
+// Go/Python ports carry): flags functions whose complexity — cyclomatic by
+// default, or cognitive with `--metric cognitive` — exceeds `--max`.
+
+const MAX_COMPLEXITY = 10;
+const CYCLOMATIC = 'cyclomatic';
+const CC_LABEL = 'CC';
+const GATE_FLAGS = { '--metric': 'metric', '--max': 'max' };
+const GATE_NUMBER_FLAGS = new Set(['--max']);
+
+/**
+ * Complexity violations across files.
+ *
+ * @param {string[]} files  absolute paths.
+ * @param {string} projectRoot
+ * @param {{ metric?: string, max?: number }} [opts]
+ * @returns {{violations: Array<{file, line, message}>, checked: number}}
+ */
+export function complexityViolations(files, projectRoot, { metric = CYCLOMATIC, max = MAX_COMPLEXITY } = {}) {
+  const violations = [];
+  let checked = 0;
+  for (const file of files) {
+    const rel = toRelPath(file, projectRoot);
+    const methods = extractMethods(readFileSync(file, UTF8), { ext: path.extname(file), metric });
+    for (const m of methods) {
+      checked++;
+      if (m.complexity > max) {
+        violations.push({
+          file: rel,
+          line: m.startLine,
+          message: `${m.name} ${metricLabel(metric)}=${m.complexity} > max ${max}`,
+        });
+      }
+    }
+  }
+  return { violations, checked };
+}
+
+// The metric label used in violation messages: CC for the cyclomatic path
+// count, the metric name itself for cognitive (upstream parity).
+function metricLabel(metric) {
+  return metric === COGNITIVE ? COGNITIVE : CC_LABEL;
+}
+
+/**
+ * One-line summary: `N/M functions over their <metric> limit <max>` on
+ * violations, `M functions within their <metric> limit <max>` otherwise.
+ */
+export function complexitySummary({ violations, checked }, metric = CYCLOMATIC, max = MAX_COMPLEXITY) {
+  return violations === 0
+    ? `${checked} functions within their ${metric} limit ${max}`
+    : `${violations}/${checked} functions over their ${metric} limit ${max}`;
+}
+
+/**
+ * Parse `complexity` arguments into `{ metric, max, paths }`. Unknown
+ * flags, a metric outside cyclomatic|cognitive, and non-integer maxima are
+ * usage errors.
+ *
+ * @param {string[]} argv
+ */
+export function parseComplexityArgs(argv) {
+  const opts = { metric: CYCLOMATIC, max: MAX_COMPLEXITY, paths: [] };
+  for (let i = 0; i < argv.length; i++) {
+    i = applyGateArg(opts, argv[i], argv, i, GATE_FLAGS, GATE_NUMBER_FLAGS);
+  }
+  if (!METRIC_NAMES.has(opts.metric)) {
+    throw new Error(`invalid --metric ${opts.metric}: expected ${CYCLOMATIC} or ${COGNITIVE}`);
+  }
+  if (!Number.isInteger(opts.max)) throw new Error(`--max must be an integer: ${opts.max}`);
+  return opts;
+}
+
+const METRIC_NAMES = new Set([CYCLOMATIC, COGNITIVE]);
+
+/**
+ * The `complexity` command body. Returns exit code 2 iff violations exist.
+ */
+export function runComplexity(argv, ctx) {
+  const opts = parseComplexityArgs(argv);
+  return runCheck(
+    ctx,
+    gateFiles(opts.paths, ctx.cwd),
+    (files, root) => complexityViolations(files, root, opts),
+    (r) => complexitySummary(r, opts.metric, opts.max),
+    'complexity',
+  );
 }

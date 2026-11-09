@@ -30,18 +30,25 @@ import { UTF8 } from './files.js';
 // its violations name directories, which no comment marker can address.
 // `mutation` is excluded: its summary carries the pre-aggregated score
 // (killed/survived counts), so dropping a suppressed survivor from the
-// printed list would desync the score from the list.
+// printed list would desync the score from the list. `test-coverage` is
+// excluded for the aggregate reason: its single violation names the
+// coverage input itself, so a file-scoped marker inside that input would
+// suppress the gate into a false pass.
 export const IGNORABLE_GATES = new Set([
   'banned-imports',
   'class-size',
   'collapsible-flow',
+  'complexity',
   'duplicates',
   'file-naming',
   'identical-branches',
   'inline-anon-types',
+  'loc',
   'magic-constants',
+  'method-size',
   'nesting',
   'non-null-assertion',
+  'public-docs',
   'scattered-constants',
   'string-hazards',
   'test-assertions',
