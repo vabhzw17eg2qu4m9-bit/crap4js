@@ -81,6 +81,24 @@
 //                            obj['k']!, chains) in .ts/.tsx — a bang
 //                            crashes on null; ?. / ?? carry the same
 //                            intent with a readable check.
+//   crap4js loc [--max-lines N] [--exclude GLOB]... [paths...]
+//                            Fail files longer than N lines (default 800).
+//   crap4js method-size [--max-lines N] [--max-params N] [paths...]
+//                            Fail methods longer than N body lines
+//                            (default 60) or with more than N params
+//                            (default 6); constructors checked for
+//                            params only.
+//   crap4js public-docs [--exclude GLOB]... [paths...]
+//                            Fail exported functions/classes and methods
+//                            of exported classes lacking JSDoc.
+//   crap4js test-coverage [--min-percent F] [--coverage PATH]
+//                      [--exclude GLOB]... [paths...]
+//                            Fail when total statement coverage of the
+//                            selection is below F% (default 80.0);
+//                            missing/empty coverage input exits 1.
+//   crap4js complexity [--metric cyclomatic|cognitive] [--max N] [paths...]
+//                            Fail functions whose complexity (CC or
+//                            cognitive) exceeds N (default 10).
 //   crap4js skill            Print the crap4js profiling skill for AI agents.
 //
 // The first argument selects a subcommand when it is exactly `profile`,
@@ -88,8 +106,9 @@
 // `unused-files`, `banned-imports`, `magic-constants`, `scattered-constants`,
 // `duplicates`, `similarity`, `test-assertions`, `inline-anon-types`,
 // `folder-structure`, `mutation`, `reorder`, `string-hazards`,
-// `identical-branches`, `collapsible-flow`, `non-null-assertion`,
-// `memory`, or `skill`;
+// `identical-branches`, `collapsible-flow`, `non-null-assertion`, `loc`,
+// `method-size`, `public-docs`, `test-coverage`, `complexity`, `memory`,
+// or `skill`;
 // anything else is analyzed as before.
 //
 // Exit codes: 0 success; 1 usage error; 2 CRAP/profile threshold exceeded
@@ -123,6 +142,11 @@ import { runStringHazards } from './stringHazards.js';
 import { runIdenticalBranches } from './identicalBranches.js';
 import { runCollapsibleFlow } from './collapsibleFlow.js';
 import { runNonNullAssertion } from './nonNullAssertion.js';
+import { runLoc } from './loc.js';
+import { runMethodSize } from './methodSize.js';
+import { runPublicDocs } from './publicDocs.js';
+import { runTestCoverage } from './testCoverage.js';
+import { runComplexity } from './complexity.js';
 import { parseProfileArgs, runProfile } from './profile.js';
 import { runMemory } from './memory.js';
 import { runSkill } from './skill.js';
@@ -272,11 +296,36 @@ function usage() {
     '                           error exits 2.',
     '  crap4js non-null-assertion [--severity warning|error] [paths...]',
     '                           Flag every TS non-null assertion (x!,',
-    '                           obj[\'k\']!, chains) in .ts/.tsx files —',
+    "                           obj['k']!, chains) in .ts/.tsx files —",
     '                           a bang crashes on null; ?. / ?? carry',
     '                           the same intent with a readable',
     '                           check. Warning by default — findings',
     '                           exit 0; --severity error exits 2.',
+    '  crap4js loc [--max-lines N] [--exclude GLOB]... [paths...]',
+    '                           Fail files longer than N lines (default',
+    '                           800); --exclude drops files from the',
+    '                           check entirely.',
+    '  crap4js method-size [--max-lines N] [--max-params N] [paths...]',
+    '                           Fail methods longer than N body lines',
+    '                           (default 60) or with more than N params',
+    '                           (default 6); constructors are checked',
+    '                           for the parameter count only.',
+    '  crap4js public-docs [--exclude GLOB]... [paths...]',
+    '                           Fail exported functions/classes and the',
+    '                           public methods of exported classes',
+    '                           lacking an adjacent /** */ JSDoc block.',
+    '  crap4js test-coverage [--min-percent F] [--coverage PATH]',
+    '                      [--exclude GLOB]... [paths...]',
+    '                           Fail when the total statement coverage',
+    '                           of the selection (from the CRAP coverage',
+    '                           input, Istanbul JSON or lcov .info) is',
+    '                           below F% (default 80.0); a missing or',
+    '                           empty coverage input fails (exit 1).',
+    '  crap4js complexity [--metric cyclomatic|cognitive] [--max N] [paths...]',
+    '                           Fail functions whose complexity exceeds',
+    '                           N (default 10): the cyclomatic path',
+    '                           count (CC) by default, or the cognitive',
+    '                           score with --metric cognitive.',
     '  crap4js skill            Print the crap4js profiling skill for AI agents',
     '',
   ].join('\n');
@@ -306,6 +355,11 @@ const SUBCOMMANDS = {
   'identical-branches': (args, ctx) => runIdenticalBranches(args, ctx),
   'collapsible-flow': (args, ctx) => runCollapsibleFlow(args, ctx),
   'non-null-assertion': (args, ctx) => runNonNullAssertion(args, ctx),
+  loc: (args, ctx) => runLoc(args, ctx),
+  'method-size': (args, ctx) => runMethodSize(args, ctx),
+  'public-docs': (args, ctx) => runPublicDocs(args, ctx),
+  'test-coverage': (args, ctx) => runTestCoverage(args, ctx),
+  complexity: (args, ctx) => runComplexity(args, ctx),
   memory: (args, ctx) => runMemory(args, ctx),
   skill: (_args, ctx) => runSkill(ctx),
 };

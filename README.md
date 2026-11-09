@@ -178,6 +178,29 @@ crap4js non-null-assertion [--severity warning|error] [paths...]
                          ++/--, ?. and ?? are not flagged). Warning by
                          default — findings exit 0; --severity error
                          exits 2.
+crap4js loc [--max-lines N] [--exclude GLOB]... [paths...]
+                         Fail files longer than N lines (default 800);
+                         --exclude drops files from the check entirely.
+crap4js method-size [--max-lines N] [--max-params N] [paths...]
+                         Fail methods longer than N body lines
+                         (default 60) or with more than N params
+                         (default 6); constructors are checked for the
+                         parameter count only.
+crap4js public-docs [--exclude GLOB]... [paths...]
+                         Fail exported functions/classes and the public
+                         methods of exported classes lacking an adjacent
+                         /** */ JSDoc block.
+crap4js test-coverage [--min-percent F] [--coverage PATH]
+                      [--exclude GLOB]... [paths...]
+                         Fail when the total statement coverage of the
+                         selection (from the CRAP coverage input) is
+                         below F% (default 80.0); a missing or empty
+                         coverage input fails (exit 1).
+crap4js complexity [--metric cyclomatic|cognitive] [--max N] [paths...]
+                         Fail functions whose complexity exceeds N
+                         (default 10): the cyclomatic path count (CC)
+                         by default, or the cognitive score with
+                         --metric cognitive.
 crap4js skill            Print the crap4js profiling skill for AI agents.
 ```
 
@@ -189,7 +212,8 @@ The gate-check subcommands (`file-naming`, `nesting`, `class-size`,
 `magic-constants`, `scattered-constants`, `duplicates`, `similarity`,
 `test-assertions`, `inline-anon-types`, `folder-structure`, `mutation`,
 `string-hazards`, `identical-branches`, `collapsible-flow`,
-`non-null-assertion`)
+`non-null-assertion`, `loc`, `method-size`, `public-docs`,
+`test-coverage`, `complexity`)
 are ports of
 crap4dart gates. crap4js has no gate framework or config
 file, so each gate is a subcommand with its default thresholds and the
@@ -1088,6 +1112,79 @@ it there. Findings honor ignore markers
 `1` on usage errors. Dogfood: the first self-scan of crap4js's own
 source found zero bangs (40 files scanned; the repo has no `.ts`/
 `.tsx` files, so the TS-only gate has no surface in this codebase yet).
+
+## `loc`
+
+`crap4js loc [--max-lines N] [--exclude GLOB]... [paths...]` (port of
+crap4dart's loc gate, config flattened to flags) fails files longer than N
+lines (default 800). The line count matches upstream: an empty file is 0
+lines and a trailing newline does not open a new one. `--exclude` globs
+(project-relative POSIX paths, repeatable, `*` within / `**` across
+segments) drop files from the check entirely — they are not counted in the
+summary either. One `file: N lines > max M` line per violation plus a
+summary; exit 2 iff violations exist. Findings honor ignore markers
+(`// ignore:loc`).
+
+## `method-size`
+
+`crap4js method-size [--max-lines N] [--max-params N] [paths...]` (port of
+crap4dart's method_size gate) fails methods longer than N body lines
+(default 60, counted as `endLine − startLine + 1`) or with more than N
+parameters (default 6). Constructors are checked for the parameter count
+only (upstream rule) — a long constructor is not flagged. The checked
+surface is the method-extraction walk the CRAP command uses, plus
+constructors: top-level functions, class methods (class-qualified names),
+object methods, and assigned/declarator function literals. Violations
+carry the method's start line; exit 2 iff violations exist. Findings honor
+ignore markers (`// ignore:method-size`).
+
+## `public-docs`
+
+`crap4js public-docs [--exclude GLOB]... [paths...]` (port of
+crap4dart's public_docs gate with the JS host conventions) fails exported
+declarations lacking an adjacent `/** ... */` JSDoc block. The public API
+surface is the exported one (the same notion `unused-code` uses):
+exported function declarations and function-valued `export const`
+declarators, exported classes, and the public methods of exported classes
+(static included, getters/setters included). Exempt: constructors (not
+part of the documented API surface upstream), private `#` methods, methods
+with computed/string keys, and anonymous default exports. A JSDoc counts
+only when the block comment ends on the line directly above the
+declaration — a `//` comment or blank line in between breaks the
+adjacency, and a plain `/* ... */` block is not a doc comment. Violation:
+`missing JSDoc on <kind> "<name>"` at the declaration line; summary counts
+public declarations checked. Exit 2 iff violations exist. Findings honor
+ignore markers (`// ignore:public-docs`).
+
+## `test-coverage`
+
+`crap4js test-coverage [--min-percent F] [--coverage PATH]
+[--exclude GLOB]... [paths...]` (port of crap4dart's coverage gate) fails
+when the total statement coverage of the selected files is below F%
+(default 80.0). The coverage input is the CRAP command's (`--coverage`,
+default `coverage/coverage-final.json`; a `.info` path parses as an lcov
+tracefile) with the same fail-closed semantics: a missing, unparseable, or
+record-free input is an input error and exits 1 — never a silent pass.
+The ratio is the statement-hit ratio the CRAP attribution uses: covered /
+total statements over the selected files that have a coverage entry
+(`--exclude` drops files before the ratio; files without an entry are
+skipped, not counted as 0%). Pass line: `coverage P% >= min M%`; violation
+line: `total coverage P% < min M%` under the coverage path. Exit 2 iff the
+ratio is below the minimum.
+
+## `complexity`
+
+`crap4js complexity [--metric cyclomatic|cognitive] [--max N] [paths...]`
+(port of crap4dart's complexity gate with the cognitive-metric option, the
+same shape the Go/Python ports carry) fails functions whose complexity
+exceeds N (default 10): the cyclomatic path count (CC, the metric the CRAP
+formula uses) by default, or the cognitive score with
+`--metric cognitive` (see the cognitive-complexity section). Violation:
+`file:line: <name> CC=<v> > max <N>` (or `cognitive=<v>` under the
+cognitive metric), one line per function plus a
+`N/M functions over their <metric> limit <N>` summary; exit 2 iff
+violations exist. Findings honor ignore markers
+(`// ignore:complexity`).
 
 ## Ignore comments
 
