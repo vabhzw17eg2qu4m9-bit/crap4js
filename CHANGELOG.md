@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.32.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.31.0...v0.32.0) (2026-11-09)
+
+
+### Features
+
+* port loc, method-size, public-docs, test-coverage, complexity gates ([#84](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/84)) ([c8407b8](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/c8407b8af2f48aa930105fad8edc7304218d045f))
+
 ## [0.31.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.30.0...v0.31.0) (2026-11-06)
 
 
