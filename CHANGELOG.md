@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.33.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.32.0...v0.33.0) (2026-11-14)
+
+
+### Features
+
+* port upstream ad4f27b — hash shingles, candidate pruning, scan cap, outermost-only profile flush ([#86](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/86)) ([54a8a17](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/54a8a17ff9eaf477a1e1bd673c686d22122c611d))
+
 ## [0.32.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.31.0...v0.32.0) (2026-11-09)
 
 
