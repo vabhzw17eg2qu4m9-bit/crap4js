@@ -36,16 +36,49 @@ const DEFAULT_TOP = 20;
 // Source of the collector preload written into the temp copy and injected
 // into every node process via NODE_OPTIONS `--import`. It installs
 // globalThis.__crap_enter/__crap_exit and writes the process's cumulative
-// stats to `<CRAP_PROFILE_OUTPUT>.<pid>.json` (temp file + rename) on
-// every flush. Each `node --test` child owns its file exclusively — no
-// cross-process read-modify-write to race on, so parallel children
-// aggregate by file, never over each other.
+// stats to `<CRAP_PROFILE_OUTPUT>.<pid>.json` (temp file + rename). Each
+// `node --test` child owns its file exclusively — no cross-process
+// read-modify-write to race on, so parallel children aggregate by file,
+// never over each other.
+//
+// Flush design (no timers — a pending timer would keep the test runner's
+// processes alive / trip node:test teardown, mirroring upstream's
+// flutter_test rule):
+//
+// - Nested method exits do NO I/O at all — file I/O inside hot loops
+//   inflated inclusive times (upstream #35, the observer effect). Only
+//   the outermost exit of the call tree can flush, and it ALWAYS flushes
+//   by default: it is the only reliable delivery point (a process that
+//   dies after its last instrumented call has no other chance to report),
+//   so data loss on normal termination is impossible.
+// - `process.on('exit')` remains as the last-chance tail flush.
+// - A backstop flush every 100000 calls bounds the loss when the stack is
+//   stuck non-empty (a leaked frame whose exit never ran).
+// - `CRAP_PROFILE_FLUSH_MS` (default 0) throttles outermost flushes to at
+//   most one per interval — an OPT-IN trade: extremely outermost-heavy
+//   loops stay I/O-light but the tail after the last throttled exit is
+//   lost unless an explicit exit flush still runs. Keep 0 unless that
+//   shape actually hurts.
+// - `#flushes` diagnostic counter in the shard (the report merge skips
+//   `#`-prefixed keys) makes the number of shard writes observable.
 const COLLECTOR_SOURCE = `
 import { renameSync, writeFileSync } from 'node:fs';
 
 const stats = new Map();
 const stack = [];
 let calls = 0;
+let flushSeq = 0;
+let lastFlushAt = 0;
+
+function intEnv(name, fallback) {
+  const n = parseInt(process.env[name], 10);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+// Opt-in outermost-flush throttle (0 = flush every outermost exit) and
+// the nested-call backstop interval; the pid names the shard file.
+const flushMinIntervalMs = intEnv('CRAP_PROFILE_FLUSH_MS', 0);
+const flushBackstopCalls = intEnv('CRAP_PROFILE_FLUSH_EVERY', 100000);
 
 // Marks method entry; paired with __crap_exit via try/finally by the
 // instrumented code. The collector owns the timing: one stack frame per
@@ -68,7 +101,8 @@ globalThis.__crap_exit = (key) => {
   if (!frame) return;
   const inclusive = Math.max(0, Math.round((performance.now() - frame.start) * 1000));
   const self = Math.max(0, inclusive - frame.childMicros);
-  if (stack.length > 0) stack[stack.length - 1].childMicros += inclusive;
+  const outermost = stack.length === 0;
+  if (!outermost) stack[stack.length - 1].childMicros += inclusive;
   const s = stats.get(key) || newStats();
   s.calls++;
   s.totalMicros += inclusive;
@@ -76,7 +110,17 @@ globalThis.__crap_exit = (key) => {
   if (inclusive < s.minMicros) s.minMicros = inclusive;
   if (inclusive > s.maxMicros) s.maxMicros = inclusive;
   stats.set(key, s);
-  if (++calls % 5 === 0) flush(); // flush every 5 calls (0.9.2)
+  calls++;
+  // Nested exits never touch the filesystem. The outermost exit is the
+  // only reliable delivery point, so it flushes by default; the opt-in
+  // interval keeps pathological outermost-heavy loops I/O-light at the
+  // cost of a bounded tail. The backstop bounds the tail when the stack
+  // is stuck non-empty (leaked frame) or the process dies mid-tree.
+  if (outermost) {
+    if (flushMinIntervalMs <= 0 || performance.now() - lastFlushAt >= flushMinIntervalMs) flush();
+  } else if (calls % flushBackstopCalls === 0) {
+    flush();
+  }
 };
 
 process.on('exit', flush);
@@ -92,17 +136,24 @@ function newStats() {
 }
 
 // Each process rewrites its own file with the full cumulative snapshot —
-// trivially exact across repeated flushes (the delta bookkeeping the
-// shared-file design needed is gone), and the rename keeps concurrent
+// trivially exact across repeated flushes, and the rename keeps concurrent
 // readers on either the old or the new file, never a torn one.
 function flush() {
   const prefix = process.env.CRAP_PROFILE_OUTPUT;
   if (!prefix || stats.size === 0) return;
+  const snapshot = Object.fromEntries(stats);
+  // Diagnostic flush counter (a '#'-prefixed key; the report merge skips
+  // it) so tests and debugging can observe how many shard writes happened.
+  // Counted as 1-based; the sequence only advances on a successful rename
+  // so a failed write retries the same number.
+  snapshot['#flushes'] = { calls: flushSeq + 1 };
   const out = prefix + '.' + process.pid + '.json';
-  const tmp = out + '.tmp';
+  const tmp = out + '.tmp.' + flushSeq;
   try {
-    writeFileSync(tmp, JSON.stringify(Object.fromEntries(stats)));
+    writeFileSync(tmp, JSON.stringify(snapshot));
     renameSync(tmp, out);
+    flushSeq++;
+    lastFlushAt = performance.now();
   } catch {
     // Best effort — a lost flush only loses timing precision.
   }
@@ -251,10 +302,17 @@ function cleanupTemp(tempDir) {
 }
 
 // Like upstream crap4dart: test output is captured and only the tail is
-// printed (to stderr) when the run fails.
+// printed (to stderr) when the run fails — test runners print progress
+// lines for every file before the failure, so the actual error lives at
+// the tail. The message is explicitly prefixed TESTS FAILED: the profile
+// command can still exit 2 on a threshold verdict, and that must not be
+// mistakable for the test run's own failure.
 function reportTestFailure(result, ctx) {
   if (result.status === 0) return;
-  ctx.err.write(`Warning: tests exited with code ${result.status}.\n`);
+  ctx.err.write(
+    `TESTS FAILED (exit code ${result.status}) — profiling data may be ` +
+      'incomplete; this is separate from any threshold verdict below.\n',
+  );
   for (const stream of [result.stderr, result.stdout]) {
     const lines = String(stream).trim().split('\n');
     if (lines[0]) ctx.err.write(lines.slice(-30).join('\n') + '\n');
@@ -267,7 +325,9 @@ function reportTestFailure(result, ctx) {
 // children can never lose each other's records — the earlier single
 // shared output file dropped them when two children both read the same
 // base and each renamed its own merge over the other (0.9.3 e2e flake).
-function readTimings(outputPrefix) {
+// Exported: the merge contract (corrupt-shard skip, tmp exclusion,
+// `#`-diagnostic skip) is pinned by test.
+export function readTimings(outputPrefix) {
   const dir = path.dirname(outputPrefix);
   let names;
   try {
@@ -298,6 +358,7 @@ function mergeTimingFile(merged, file) {
     return;
   }
   for (const [key, s] of Object.entries(data)) {
+    if (key.startsWith('#')) continue; // collector diagnostics (#flushes)
     const ex = merged[key];
     if (!ex) {
       merged[key] = { ...s };

@@ -301,20 +301,35 @@ How it works (port of crap4dart 0.4.0 / 0.9.x fixes):
    `NODE_OPTIONS --import`; it keeps a call stack of open calls (one frame
    per `enter`, holding the start time and the nested-call time accrued so
    far), aggregates per method (calls, totalMicros, totalSelfMicros,
-   minMicros, maxMicros), and flushes every 5 calls plus at
-   `process.on('exit')`. `CRAP_PROFILE_OUTPUT` is a file-name PREFIX:
-   every process writes its own `<prefix>.<pid>.json` with its full
+   minMicros, maxMicros), and flushes at the OUTERMOST exit of a call
+   tree only — nested exits touch no filesystem at all (flushing every
+   5th exit was file I/O inside hot loops: the observer effect that
+   inflated inclusive times, upstream ad4f27b/#35). The outermost exit
+   flushes by default — it is the only reliable delivery point, so data
+   loss on normal termination is impossible — and `process.on('exit')`
+   stays as the last-chance tail flush. A backstop flush every 100000
+   calls (env `CRAP_PROFILE_FLUSH_EVERY`) bounds the loss when the stack
+   is stuck non-empty (a leaked frame whose exit never ran);
+   `CRAP_PROFILE_FLUSH_MS` (default 0) throttles outermost flushes to at
+   most one per interval — an OPT-IN trade with a bounded tail (the last
+   throttled window's data arrives only via the exit hook, or never on a
+   hard kill). No timers (a pending timer would keep the test runner's
+   processes alive, mirroring upstream's flutter_test rule). Each shard
+   write carries a `#flushes` diagnostic counter (a `#`-prefixed key the
+   merge skips). `CRAP_PROFILE_OUTPUT` is a file-name PREFIX: every
+   process writes its own `<prefix>.<pid>.json` with its full
    cumulative snapshot (temp file + rename), and the parent merges all
-   per-pid files afterwards (counters sum, min/max reduce). Each `node
-   --test` child is a separate process, and each exclusively owns its
-   file, so near-simultaneous children can never lose each other's
-   records — the earlier single shared output file dropped them when two
-   children both read the same base and each renamed its own merge over
-   the other (a real flake in the 0.9.3 explicit-path e2e scenario; the
-   0.9.2 retry-around-rename and the 0.9.5 delta-flush bookkeeping both
-   existed to patch that shared file and are gone with it: a process
-   rewriting its own cumulative snapshot is exact across any number of
-   flushes). Same design as the Go port's per-pid record files.
+   per-pid files afterwards (counters sum, min/max reduce, `#` keys
+   skipped). Each `node --test` child is a separate process, and each
+   exclusively owns its file, so near-simultaneous children can never
+   lose each other's records — the earlier single shared output file
+   dropped them when two children both read the same base and each
+   renamed its own merge over the other (a real flake in the 0.9.3
+   explicit-path e2e scenario; the 0.9.2 retry-around-rename and the
+   0.9.5 delta-flush bookkeeping both existed to patch that shared file
+   and are gone with it: a process rewriting its own cumulative snapshot
+   is exact across any number of flushes). Same design as the Go port's
+   per-pid record files.
 4. `node --test` runs in the temp copy; timings are attributed to the
    analyzer's method inventory by `"<relFile>|<methodName>"` key — unmatched
    entries are ignored. The temp directory is removed afterwards (kept when
@@ -408,8 +423,11 @@ separately — raw GC counts are machine-dependent, allocated MB are not.
   after one collection — V8 exposes no generation split, so upstream's
   new-gen churn / old-gen growth pair collapses to `churnMb`
   (Σ max(0, before − after): reclaimed heap volume, the allocation proxy)
-  and `heapGrowthMb` (Σ after − before: signed retained growth, the leak
-  suspect). The `pooled:` external-memory column and pause times are
+  and `heapGrowthMb` (Σ after − before: signed retained growth — a leak
+  SUSPECT only: much of it is reclaimed on teardown, so judge leaks by
+  post-teardown/steady-state growth, never by this number alone;
+  upstream ad4f27b wording). The `pooled:` external-memory column and
+  pause times are
   parsed past, not summed. Totals span every parsed row; suite/test
   totals carry only window-attributed rows — the difference is exactly
   the bucket.
@@ -1120,9 +1138,17 @@ differing only in literal values still match. Any other extension is
 file, exactly upstream: no JS-specific parser is involved, so the same
 scan covers mixed-language corpora.
 
-Shingles are 8 consecutive comparison tokens joined with the unit
-separator (upstream's `\u001f`); files with fewer than 8 tokens produce
-no shingles and are skipped as `skipped` once below `--min-shingles`
+Shingles are 8 consecutive comparison tokens, each hashed to a
+non-negative 53-bit-safe Number by exact 64-bit FNV-1a arithmetic in
+two uint32 halves (upstream ad4f27b: one Number per shingle instead of
+the joined `\u001f` string — shingle sets of a large tree would
+otherwise retain multi-GB of strings; BigInt is avoided in the hot
+loop, all partial products stay integer-exact below 2^42, and the fold
+`(hi & 0x1fffff) * 2^32 + lo` keeps every value inside the
+double-precision safe range). A separator unit is hashed after EVERY
+token, so `["ab", "c"]` and `["a", "bc"]` hash differently — boundary
+ambiguity is impossible. Files with fewer than 8 tokens produce no
+shingles and are skipped as `skipped` once below `--min-shingles`
 (default 50). Pairs are compared by Jaccard (intersection over union)
 and containment (intersection over the smaller set): a pair crosses when
 EITHER metric meets its threshold (`--jaccard` 0.8, `--containment` 0.95
@@ -1134,11 +1160,24 @@ them into clusters of 2+ files, largest first. `metricsFor` reports each
 file's strongest (highest-Jaccard) pair metrics for the per-file console
 lines.
 
+Candidate pruning (upstream ad4f27b): only file pairs sharing at least
+one shingle hash can cross a positive threshold, so an inverted index
+(hash → postings list) generates the candidate pairs — deduplicated by
+flattened index keys — and exact Jaccard/containment run on those only.
+A shingle hash shared by more than 100 files carries no duplicate signal
+(boilerplate) and is skipped as a pair source. The naive all-pairs loop
+is quadratic and made large trees effectively hang. A scan scope
+matching more than 20000 files (MAX_SCAN_FILES) is almost certainly an
+over-broad `--include`/dirs scope; `analyzeSimilarity` throws a loud
+error naming the narrowing knobs, and the command surfaces it as a
+usage error (exit 1) instead of exhausting memory on the shingle index.
+
 Scan set: `dirs` (default `['.']`) walked recursively, include globs
 (default `**/*.md`) and exclude globs (default `.git/**`,
-`node_modules/**`, `build/**`, `coverage/**` — upstream's list minus
-`.dart_tool/**`, which has no JS counterpart) matched against
-project-relative paths. Positional paths override the dirs: one existing
+`.worktrees/**` — upstream ad4f27b addition, where this repo's own port
+worktrees live, `node_modules/**`, `build/**`, `coverage/**` —
+upstream's list minus `.dart_tool/**`, which has no JS counterpart)
+matched against project-relative paths. Positional paths override the dirs: one existing
 directory becomes the scan root itself (`dirs: ['.']`), several paths
 are subdirectories of the project root, none uses the defaults —
 upstream's `_scanTargets` semantics. Upstream reads the same knobs as
@@ -1150,7 +1189,8 @@ Upstream ships this as an opt-in config gate (`enabled: false`,
 violations fail `check` with exit 2) PLUS the ad-hoc `similarity`
 command (always exit 0). crap4js has no gate framework or check
 pipeline — every gate here is a subcommand — so the port is the
-command: informational only, ALWAYS exits 0, clean or dirty; the
+command: informational, exits 0 clean or dirty (the one usage-shaped
+exception: the 20000-file scan cap above exits 1); the
 one-violation-per-clustered-file gate rendering has no separate surface
 (the console cluster listing carries the same per-file metrics). Console
 output: a `similarity: N files scanned (M skipped below K shingles),
@@ -1421,13 +1461,15 @@ codebase yet).
 - pixel-detector tuning commits — same Flutter-goldens-only area.
 - 0.9.5 icon/PNG branding assets (commit b789739) — upstream branding
   only; no JS counterpart.
-- 0.9.5 public `flush()` + flush-on-outermost-method-exit —
-  Dart/flutter_test-specific (flutter_test fails on pending timers, so
-  upstream cannot keep a timer alive and flushes when the outermost call
-  returns instead). Node has no such restriction: the JS collector flushes
-  at `process.on('exit')`, which covers the same short-run tail-loss risk.
-  Ported instead: the 0.9.5 no-inflation guarantee — via per-pid output
-  files (step 3 above) rather than upstream's delta-flush bookkeeping.
+
+The 0.9.5 outermost-exit flush design first shipped as a
+flutter_test-specific N/A (this collector flushed every 5 calls plus at
+`process.on('exit')`); upstream ad4f27b generalized it for the observer
+effect (#35) and the port now matches — outermost-exit-only flush, 100k
+backstop, opt-in throttle, `#flushes` diagnostic (step 3 of `profile`
+above). Still N/A from that commit: the `flush()` public API surface
+(Node needs no explicit test-end flush — the exit hook delivers the
+tail) and allocatedLoadingBytes (flutter allocation profile).
 
 ## reorder
 
