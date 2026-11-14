@@ -104,7 +104,9 @@ export function reclaimedMb(gc) {
 }
 
 // Signed retained growth across one collection (positive = survived,
-// negative = freed) — the leak-suspect signal.
+// negative = freed). Positive growth is a leak SUSPECT only: much of it
+// is reclaimed on teardown, so judge leaks by post-teardown/steady-state
+// growth, never by this number alone (upstream ad4f27b wording).
 export function heapDeltaMb(gc) {
   return gc.usedAfterMb - gc.usedBeforeMb;
 }
@@ -575,7 +577,10 @@ function printConsole(report, top, out) {
     '\ntop ' + top + ' by allocation volume (churn MB proxy on node):\n',
   );
   printTable(byDesc(report.tests, 'churnMb').slice(0, top), out);
-  out.write('\ntop ' + top + ' by heap growth (leak suspects first):\n');
+  out.write(
+    '\ntop ' + top +
+      ' by heap growth (leak SUSPECTS only — judge by post-teardown/steady-state):\n',
+  );
   printTable(byDesc(report.tests, 'growthMb').slice(0, top), out);
 }
 

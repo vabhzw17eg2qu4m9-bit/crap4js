@@ -218,7 +218,8 @@ are ports of
 crap4dart gates. crap4js has no gate framework or config
 file, so each gate is a subcommand with its default thresholds and the
 shared exit-code contract: `0` pass/skip, `1` usage error, `2` violations
-(`similarity` is informational and always exits 0 — see its section;
+(`similarity` is informational and exits 0 — except a scan scope above
+the 20000-file safety cap, a usage error: exit 1; see its section;
 `string-hazards`, `identical-branches`, `collapsible-flow`, and
 `non-null-assertion` default
 to warning severity, where findings are printed but exit 0, and
@@ -841,20 +842,29 @@ by its profile — markdown (`.md`/`.markdown`/`.mdx`) drops fenced code
 blocks and keeps the prose words; code (25 source extensions) strips
 comments and import-family lines, lowercases identifiers and maps
 string/number literals to `S`/`N` placeholders; anything else compares
-as-is. The normalized token stream is cut into 8-token shingles; file
-pairs are compared by Jaccard (intersection over union) and containment
-(how much of the smaller file the larger one reproduces — catches a
-small file copied into a big one). A pair is reported when EITHER metric
-meets its threshold; transitively connected pairs merge into clusters
-(union-find), largest first.
+as-is. The normalized token stream is cut into 8-token shingles, each
+hashed to a non-negative 53-bit-safe value by exact 64-bit FNV-1a
+arithmetic in two 32-bit halves (a separator unit after every token, so
+`["ab", "c"]` and `["a", "bc"]` hash differently — BigInt-free and
+stable across platforms); file pairs are compared by Jaccard
+(intersection over union) and containment (how much of the smaller file
+the larger one reproduces — catches a small file copied into a big
+one). A pair is reported when EITHER metric meets its threshold;
+transitively connected pairs merge into clusters (union-find), largest
+first. Comparisons are candidate-pruned through an inverted shingle
+index — only pairs sharing at least one shingle hash are scored, and
+shingles shared by more than 100 files are skipped as boilerplate — so
+large trees stay linear-ish instead of quadratic (upstream ad4f27b).
+A scan scope matching more than 20000 files is a loud usage error
+(exit 1, naming the narrowing knobs) instead of a memory death.
 
 Defaults mirror the upstream gate template (`gates.similarity` in
 crap4dart.yaml — crap4js has no config file, so they are kebab-case CLI
-flags): include `**/*.md`, exclude `.git/** node_modules/** build/**
-coverage/**`, `--min-shingles 50` (files below the floor are skipped),
-`--jaccard 0.8`, `--containment 0.95`. Positional paths override the
-scan dirs: one existing directory becomes the scan root, several paths
-are subdirectories of the project root.
+flags): include `**/*.md`, exclude `.git/** .worktrees/**
+node_modules/** build/** coverage/**`, `--min-shingles 50` (files below
+the floor are skipped), `--jaccard 0.8`, `--containment 0.95`.
+Positional paths override the scan dirs: one existing directory becomes
+the scan root, several paths are subdirectories of the project root.
 
 The command is upstream's ad-hoc exploration tool for tuning the
 thresholds — upstream pairs it with a config gate (`enabled: false` by

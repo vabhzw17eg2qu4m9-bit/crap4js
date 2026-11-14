@@ -28,7 +28,13 @@ const DEFAULT_INCLUDE = ['**/*.md'];
 const DEFAULT_MIN_SHINGLES = 50;
 const DEFAULT_JACCARD = 0.8;
 const DEFAULT_CONTAINMENT = 0.95;
-const DEFAULT_EXCLUDE = ['.git/**', 'node_modules/**', 'build/**', 'coverage/**'];
+const DEFAULT_EXCLUDE = [
+  '.git/**',
+  '.worktrees/**',
+  'node_modules/**',
+  'build/**',
+  'coverage/**',
+];
 
 // Content profiles (upstream SimilarityProfile enum values).
 const MARKDOWN = 'markdown';
@@ -163,10 +169,55 @@ function codeTokenValue(token) {
   return token.toLowerCase();
 }
 
+// FNV-1a over one shingle as exact 64-bit arithmetic in two uint32
+// halves (hi:lo). The prime 0x100000001b3 = 2^40 + 0x1b3, so one step is
+// `(v ^ byte) * 2^40 + (v ^ byte) * 0x1b3` mod 2^64 — every partial
+// product stays below 2^42, inside double-precision exactness. No BigInt
+// (this is the scan's hot loop) and no platform-dependent float math:
+// all operands are integer-exact. The result is folded to 53 bits
+// (`hi & 0x1fffff` gives 21 bits, plus the low 32 — max 2^53 - 1) so a
+// shingle is one exact, non-negative Number key; collisions across a
+// tree's shingle count stay astronomically unlikely in the 2^53 space.
+const FNV_OFFSET_HI = 0xcbf29ce4;
+const FNV_OFFSET_LO = 0x84222325; // 64-bit offset basis 0xcbf29ce484222325
+const FNV_PRIME_LOW = 0x1b3;
+const SHINGLE_SEPARATOR = 0x1f;
+const HASH_LOW_MASK = 0x1fffff;
+const LOW24_MASK = 0xffffff;
+const UINT32 = 4294967296;
+
+// Mixes one byte into the [hi, lo] FNV-1a state: XOR into the low half,
+// then multiply by the prime via the 2^40 + 0x1b3 decomposition.
+function fnvMix(state, byte) {
+  const lo = (state[1] ^ byte) >>> 0;
+  const loProd = lo * FNV_PRIME_LOW;
+  state[0] =
+    (state[0] * FNV_PRIME_LOW + Math.floor(loProd / UINT32) + ((lo & LOW24_MASK) << 8)) % UINT32;
+  state[1] = loProd % UINT32;
+}
+
 /**
- * The set of 8-token shingles of content under the profile, or an empty
- * set when there are fewer tokens than one shingle (such files carry no
- * similarity signal).
+ * 64-bit FNV-1a of one shingle: the 8 tokens starting at `start`, each
+ * terminated by a separator unit so `["ab", "c"]` and `["a", "bc"]` hash
+ * differently. Hashing keeps one Number per shingle instead of the full
+ * joined token string — the shingle sets of a large tree otherwise
+ * retain multi-GB of strings (IstiN/crap4dart#34). Returns a 53-bit-safe
+ * non-negative value (see the constant notes above).
+ */
+export function shingleHash(tokens, start) {
+  const state = [FNV_OFFSET_HI, FNV_OFFSET_LO];
+  for (let i = start; i < start + SHINGLE_SIZE; i++) {
+    const token = tokens[i];
+    for (let k = 0; k < token.length; k++) fnvMix(state, token.charCodeAt(k));
+    fnvMix(state, SHINGLE_SEPARATOR);
+  }
+  return (state[0] & HASH_LOW_MASK) * UINT32 + state[1];
+}
+
+/**
+ * The set of 8-token shingle hashes of content under the profile, or an
+ * empty set when there are fewer tokens than one shingle (such files
+ * carry no similarity signal).
  *
  * The content is normalized for the profile first (markdown loses its
  * fenced code blocks, code loses comments/imports and keeps literal
@@ -177,7 +228,7 @@ export function shinglesFor(content, profile) {
   if (tokens.length < SHINGLE_SIZE) return new Set();
   const shingles = new Set();
   for (let i = 0; i + SHINGLE_SIZE <= tokens.length; i++) {
-    shingles.add(tokens.slice(i, i + SHINGLE_SIZE).join('\u001f'));
+    shingles.add(shingleHash(tokens, i));
   }
   return shingles;
 }
@@ -226,9 +277,17 @@ export function containment(a, b) {
 export function analyzeSimilarity(projectRoot, opts) {
   const include = opts.include.map(globToRegExp);
   const exclude = opts.exclude.map(globToRegExp);
+  const files = collect(projectRoot, opts.dirs, include, exclude);
+  if (files.length > MAX_SCAN_FILES) {
+    throw new Error(
+      `similarity scan scope matches ${files.length} files, above the ` +
+        `${MAX_SCAN_FILES}-file safety cap: narrow --include or the positional ` +
+        'dirs, or extend --exclude',
+    );
+  }
   const analyzed = [];
   let skipped = 0;
-  for (const file of collect(projectRoot, opts.dirs, include, exclude)) {
+  for (const file of files) {
     const shingles = shinglesFor(
       readFileSync(file, UTF8),
       profileFor(toRelPath(file, projectRoot)),
@@ -276,18 +335,81 @@ function matchesAny(globs, relPath) {
   return globs.some((glob) => glob.test(relPath));
 }
 
+// Hard ceiling on the number of files one scan analyzes. Beyond this the
+// scan is almost certainly an over-broad include/dirs scope (vendored
+// checkouts, generated corpora) that would exhaust memory on the shingle
+// index; analyzeSimilarity throws instead of crashing the whole check
+// run.
+export const MAX_SCAN_FILES = 20000;
+
+// Shingle hashes shared by more files than this carry no duplicate
+// signal (boilerplate) and are skipped when building pair candidates.
+const MAX_POSTINGS = 100;
+
+// Maps every shingle hash to the indexes of the files containing it.
+function invertedIndex(files) {
+  const index = new Map();
+  for (let i = 0; i < files.length; i++) {
+    for (const hash of files[i].shingles) {
+      const postings = index.get(hash);
+      if (postings) postings.push(i);
+      else index.set(hash, [i]);
+    }
+  }
+  return index;
+}
+
+// Unique ordered pairs within one postings list, skipping pairs already
+// emitted (tracked via seen of flattened i * width + j keys that grows
+// with the candidate count, not the quadratic pair space).
+function postingsPairs(files, postings, seen) {
+  const pairs = [];
+  const width = files.length;
+  for (let x = 0; x < postings.length; x++) {
+    for (let y = x + 1; y < postings.length; y++) {
+      const i = postings[x];
+      const j = postings[y];
+      const flat = i * width + j;
+      if (seen.has(flat)) continue;
+      seen.add(flat);
+      pairs.push([files[i], files[j]]);
+    }
+  }
+  return pairs;
+}
+
+// Whether a postings list yields pair candidates: fewer than 2 files
+// share the shingle (no pair), more than MAX_POSTINGS carry no duplicate
+// signal (boilerplate — skipped).
+function isCandidatePostings(count) {
+  return count >= 2 && count <= MAX_POSTINGS;
+}
+
+// Unique file pairs sharing at least one shingle hash, via an inverted
+// index. A pair can only cross a positive threshold when the two files
+// share at least one shingle hash, so exact Jaccard / containment run on
+// candidate pairs only — the naive all-pairs loop is quadratic in the
+// file count and made large trees effectively hang (IstiN/crap4dart#34).
+function candidatePairs(files) {
+  const index = invertedIndex(files);
+  const seen = new Set();
+  const pairs = [];
+  for (const postings of index.values()) {
+    if (isCandidatePostings(postings.length)) {
+      pairs.push(...postingsPairs(files, postings, seen));
+    }
+  }
+  return pairs;
+}
+
 // All pairs crossing either threshold, strongest first.
 function pairsOverThresholds(files, jaccardThreshold, containmentThreshold) {
   const pairs = [];
-  for (let i = 0; i < files.length; i++) {
-    for (let j = i + 1; j < files.length; j++) {
-      const a = files[i];
-      const b = files[j];
-      const jScore = jaccard(a.shingles, b.shingles);
-      const cScore = containment(a.shingles, b.shingles);
-      if (jScore < jaccardThreshold && cScore < containmentThreshold) continue;
-      pairs.push({ a: a.path, b: b.path, jaccard: jScore, containment: cScore });
-    }
+  for (const [a, b] of candidatePairs(files)) {
+    const jScore = jaccard(a.shingles, b.shingles);
+    const cScore = containment(a.shingles, b.shingles);
+    if (jScore < jaccardThreshold && cScore < containmentThreshold) continue;
+    pairs.push({ a: a.path, b: b.path, jaccard: jScore, containment: cScore });
   }
   return pairs.sort((x, y) => y.jaccard - x.jaccard);
 }

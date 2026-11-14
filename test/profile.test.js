@@ -12,6 +12,7 @@ import {
   COLLECTOR_SOURCE,
   formatProfileReport,
   parseProfileArgs,
+  readTimings,
 } from '../src/profile.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -23,30 +24,6 @@ function runCli(cwd, args) {
     encoding: 'utf8',
     env: { ...process.env },
   });
-}
-
-// Reads a collector output PREFIX the way the parent does: every
-// <prefix>.<pid>.json merged (counters sum, min/max reduce).
-function readTimings(prefix) {
-  const merged = {};
-  const dir = path.dirname(prefix);
-  for (const name of readdirSync(dir)) {
-    if (!name.startsWith(path.basename(prefix) + '.') || !name.endsWith('.json')) continue;
-    const data = JSON.parse(readFileSync(path.join(dir, name), 'utf8'));
-    for (const [key, s] of Object.entries(data)) {
-      const ex = merged[key];
-      if (!ex) {
-        merged[key] = { ...s };
-        continue;
-      }
-      ex.calls += s.calls;
-      ex.totalMicros += s.totalMicros;
-      ex.totalSelfMicros += s.totalSelfMicros;
-      ex.minMicros = Math.min(ex.minMicros, s.minMicros);
-      ex.maxMicros = Math.max(ex.maxMicros, s.maxMicros);
-    }
-  }
-  return merged;
 }
 
 test('instrumentSource wraps function bodies in enter + try/finally-exit', () => {
@@ -127,8 +104,10 @@ test('collector aggregates calls/min/max and merges across processes', () => {
 });
 
 // Each collector process owns its output file and rewrites it with the full
-// cumulative snapshot on every flush (every 5 calls) and at exit — exact
-// across any number of flushes (the 0.9.5 no-inflation contract).
+// cumulative snapshot on every outermost-exit flush and at exit — exact
+// across any number of flushes (the no-inflation contract). 43 top-level
+// calls are 43 outermost exits + the exit hook, so the #flushes diagnostic
+// counts 44 writes; nested exits would add none.
 test('collector keeps counters exact across repeated flushes (0.9.5)', () => {
   const root = mkdtempSync(path.join(tmpdir(), 'crap4js-collector-flush-'));
   try {
@@ -154,9 +133,17 @@ test('collector keeps counters exact across repeated flushes (0.9.5)', () => {
     });
     assert.equal(run.status, 0, run.stderr);
     const data = readTimings(output);
-    assert.equal(data['src/a.js|f'].calls, 43); // 8 auto-flushes + exit flush, cumulative snapshots
+    assert.equal(data['src/a.js|f'].calls, 43); // cumulative snapshots, no inflation
     assert.ok(data['src/a.js|f'].totalMicros < 10000);
     assert.equal(data['src/a.js|f'].totalSelfMicros, data['src/a.js|f'].totalMicros);
+    assert.equal(data['#flushes'], undefined); // diagnostic key skipped by the merge
+    const shard = JSON.parse(
+      readFileSync(
+        path.join(root, readdirSync(root).find((n) => /^out\.\d+\.json$/.test(n))),
+        'utf8',
+      ),
+    );
+    assert.equal(shard['#flushes'].calls, 44); // 43 outermost exits + exit hook
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -242,6 +229,215 @@ test('concurrent collectors each own their output file — no lost updates', asy
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+// Nested exits must never touch the filesystem (the observer effect: file
+// I/O inside hot loops inflates inclusive times). The driver itself checks
+// the output dir between exits — nothing exists while `outer` is still
+// open — and the final shard's #flushes diagnostic pins the write count.
+test('nested exits write nothing; only the outermost exit flushes', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'crap4js-collector-outer-'));
+  try {
+    const preload = path.join(root, 'preload.mjs');
+    const output = path.join(root, 'out');
+    writeFileSync(preload, COLLECTOR_SOURCE);
+    writeFileSync(
+      path.join(root, 'driver.mjs'),
+      `
+      import { readdirSync } from 'node:fs';
+      import { dirname } from 'node:path';
+      const dir = dirname(process.env.CRAP_PROFILE_OUTPUT);
+      const shards = () => readdirSync(dir).filter((n) => /^out\\.\\d+\\.json$/.test(n));
+      globalThis.__crap_enter('src/a.js|outer');
+      globalThis.__crap_enter('src/a.js|inner');
+      globalThis.__crap_exit('src/a.js|inner');
+      if (shards().length !== 0) {
+        console.error('nested exit flushed: ' + shards());
+        process.exit(1);
+      }
+      globalThis.__crap_exit('src/a.js|outer');
+      if (shards().length !== 1) {
+        console.error('outermost exit did not flush');
+        process.exit(1);
+      }
+      `,
+    );
+    const run = spawnSync(process.execPath, [path.join(root, 'driver.mjs')], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CRAP_PROFILE_OUTPUT: output,
+        NODE_OPTIONS: `--import ${pathToFileURL(preload).href}`,
+      },
+    });
+    assert.equal(run.status, 0, run.stderr);
+    const shard = JSON.parse(
+      readFileSync(
+        path.join(root, readdirSync(root).find((n) => /^out\.\d+\.json$/.test(n))),
+        'utf8',
+      ),
+    );
+    assert.equal(shard['#flushes'].calls, 2); // outermost exit + exit hook only
+    assert.equal(shard['src/a.js|inner'].calls, 1);
+    assert.equal(shard['src/a.js|outer'].calls, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Bounded backstop: a stack stuck non-empty (leaked frame whose exit never
+// ran) still flushes every CRAP_PROFILE_FLUSH_EVERY calls. 12 nested inner
+// exits under a never-exited outer frame with the backstop at 5 → writes
+// after calls 5 and 10, visible in the output dir while the stack is
+// still non-empty.
+test('backstop flushes bounded losses when the stack is stuck nested', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'crap4js-collector-backstop-'));
+  try {
+    const preload = path.join(root, 'preload.mjs');
+    const output = path.join(root, 'out');
+    writeFileSync(preload, COLLECTOR_SOURCE);
+    writeFileSync(
+      path.join(root, 'driver.mjs'),
+      `
+      import { readdirSync } from 'node:fs';
+      import { dirname } from 'node:path';
+      const dir = dirname(process.env.CRAP_PROFILE_OUTPUT);
+      globalThis.__crap_enter('src/a.js|outer');
+      for (let i = 0; i < 12; i++) {
+        globalThis.__crap_enter('src/a.js|inner');
+        globalThis.__crap_exit('src/a.js|inner');
+        if (i === 5 && readdirSync(dir).filter((n) => /^out\\.\\d+\\.json$/.test(n)).length === 0) {
+          console.error('backstop did not flush while nested');
+          process.exit(1);
+        }
+      }
+      // 'outer' never exits: the process ends with a non-empty stack.
+      `,
+    );
+    const run = spawnSync(process.execPath, [path.join(root, 'driver.mjs')], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CRAP_PROFILE_OUTPUT: output,
+        CRAP_PROFILE_FLUSH_EVERY: '5',
+        NODE_OPTIONS: `--import ${pathToFileURL(preload).href}`,
+      },
+    });
+    assert.equal(run.status, 0, run.stderr);
+    const shard = JSON.parse(
+      readFileSync(
+        path.join(root, readdirSync(root).find((n) => /^out\.\d+\.json$/.test(n))),
+        'utf8',
+      ),
+    );
+    assert.equal(shard['#flushes'].calls, 3); // backstops at calls 5, 10 + exit hook
+    const data = readTimings(path.join(root, 'out'));
+    assert.equal(data['src/a.js|inner'].calls, 12);
+    assert.equal(data['src/a.js|outer'], undefined); // never exited — never recorded
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// CRAP_PROFILE_FLUSH_MS throttles outermost flushes to at most one per
+// interval. Deterministic gating: call 1 fires after a 60ms warmup (past
+// the 50ms interval no matter how long the preload import took) and
+// flushes; calls 2 and 3 fire microseconds after it — inside the freshly
+// reset interval — and are throttled; call 4 fires after another 60ms and
+// flushes. Plus the exit hook: 3 writes total, unthrottled 5. The counters
+// stay exact either way (each write is a cumulative snapshot).
+test('CRAP_PROFILE_FLUSH_MS throttles outermost flushes', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'crap4js-collector-throttle-'));
+  try {
+    const preload = path.join(root, 'preload.mjs');
+    const output = path.join(root, 'out');
+    writeFileSync(preload, COLLECTOR_SOURCE);
+    writeFileSync(
+      path.join(root, 'driver.mjs'),
+      `
+      const busy = (ms) => { const end = performance.now() + ms; while (performance.now() < end); };
+      busy(60);
+      for (let i = 0; i < 3; i++) {
+        globalThis.__crap_enter('src/a.js|f');
+        globalThis.__crap_exit('src/a.js|f');
+      }
+      busy(60);
+      globalThis.__crap_enter('src/a.js|f');
+      globalThis.__crap_exit('src/a.js|f');
+      `,
+    );
+    const run = (extra) =>
+      spawnSync(process.execPath, [path.join(root, 'driver.mjs')], {
+        cwd: root,
+        env: {
+          ...process.env,
+          CRAP_PROFILE_OUTPUT: output,
+          NODE_OPTIONS: `--import ${pathToFileURL(preload).href}`,
+          ...extra,
+        },
+      });
+    const shardCalls = () =>
+      JSON.parse(
+        readFileSync(
+          path.join(root, readdirSync(root).find((n) => /^out\.\d+\.json$/.test(n))),
+          'utf8',
+        ),
+      );
+    run({ CRAP_PROFILE_FLUSH_MS: '50' });
+    let shard = shardCalls();
+    assert.equal(shard['#flushes'].calls, 3); // calls 1, 4 + exit hook; calls 2-3 throttled
+    assert.equal(shard['src/a.js|f'].calls, 4); // exact via cumulative snapshots
+    for (const name of readdirSync(root)) {
+      if (/^out\.\d+\.json$/.test(name)) rmSync(path.join(root, name));
+    }
+    run({}); // default 0 = flush every outermost exit
+    shard = shardCalls();
+    assert.equal(shard['#flushes'].calls, 5); // 4 outermost + exit hook
+    assert.equal(shard['src/a.js|f'].calls, 4);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Merge contract of the parent reader: corrupt shards are skipped (a
+// concurrent rename can leave a reader mid-file — the remaining shards
+// still report), in-flight .tmp staging files never match, `#` diagnostics
+// are not timings, counters sum and min/max reduce.
+test('readTimings merges shards: sums, min/max reduce, skips corrupt/tmp/#', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'crap4js-collector-merge-'));
+  try {
+    const prefix = path.join(root, 'out');
+    writeFileSync(
+      path.join(root, 'out.111.json'),
+      JSON.stringify({ m: { calls: 2, totalMicros: 100, totalSelfMicros: 80, minMicros: 40, maxMicros: 60 } }),
+    );
+    writeFileSync(
+      path.join(root, 'out.222.json'),
+      JSON.stringify({
+        m: { calls: 3, totalMicros: 200, totalSelfMicros: 150, minMicros: 50, maxMicros: 90 },
+        '#flushes': { calls: 4 },
+      }),
+    );
+    writeFileSync(path.join(root, 'out.333.json'), 'not json at all {');
+    writeFileSync(
+      path.join(root, 'out.444.json.tmp.0'),
+      JSON.stringify({ m: { calls: 99, totalMicros: 999, totalSelfMicros: 999, minMicros: 1, maxMicros: 999 } }),
+    );
+    const merged = readTimings(prefix);
+    assert.deepEqual(merged, {
+      m: { calls: 5, totalMicros: 300, totalSelfMicros: 230, minMicros: 40, maxMicros: 90 },
+    });
+    // Nothing survives → no data; a missing output dir → no data.
+    const empty = path.join(root, 'empty');
+    mkdirSync(empty);
+    writeFileSync(path.join(empty, 'out.555.json'), 'garbage {');
+    writeFileSync(path.join(empty, 'out.556.json.tmp.0'), '{"m":{"calls":1}}');
+    assert.equal(readTimings(path.join(empty, 'out')), null);
+    assert.equal(readTimings(path.join(root, 'missing')), null);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('formatProfileReport sorts by TOTAL, limits top, formats threshold line', () => {
   const profiles = [
     { method: 'fast', file: 'src/a.js', line: 1, calls: 10, totalMicros: 100, minMicros: 5, maxMicros: 20 },
@@ -485,8 +681,41 @@ test('profile survives failing tests: warns on stderr, still reports', () => {
       ].join('\n'),
     );
     const r = runCli(root, ['profile']);
-    assert.match(r.stderr, /Warning: tests exited with code 1/);
+    assert.match(r.stderr, /TESTS FAILED \(exit code 1\)/);
+    assert.match(r.stderr, /separate from any threshold verdict/);
     assert.match(r.stdout, /add\s+src\/add\.js:1/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// The LAST 30 lines are shown, not the first: test runners print progress
+// lines for every file before the failure, so the actual error lives at
+// the tail. 40 noise lines + a failure = the first noise line is dropped,
+// the last one kept, under the explicit TESTS FAILED marker.
+test('test failure reports the LAST 30 lines under a TESTS FAILED marker', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'crap4js-profile-tail-'));
+  try {
+    mkdirSync(path.join(root, 'src'));
+    mkdirSync(path.join(root, 'test'));
+    writeFileSync(path.join(root, 'package.json'), '{"type":"module"}');
+    writeFileSync(path.join(root, 'src', 'add.js'), 'export function add(a, b) {\n  return a + b;\n}\n');
+    writeFileSync(
+      path.join(root, 'test', 'add.test.js'),
+      [
+        "import test from 'node:test';",
+        "import assert from 'node:assert';",
+        "import { add } from '../src/add.js';",
+        "for (let i = 1; i <= 40; i++) console.error('noise-' + i);",
+        'test(\'add works\', () => assert.equal(add(1, 2), 99));',
+        '',
+      ].join('\n'),
+    );
+    const r = runCli(root, ['profile']);
+    assert.match(r.stderr, /TESTS FAILED/);
+    assert.match(r.stderr, /^noise-40$/m); // tail kept
+    assert.doesNotMatch(r.stderr, /^noise-1$/m); // head dropped (30-line tail)
+    assert.doesNotMatch(r.stderr, /^noise-10$/m);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

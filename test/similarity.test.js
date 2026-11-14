@@ -21,6 +21,7 @@ import {
   parseSimilarityArgs,
   profileFor,
   runSimilarity,
+  shingleHash,
   shinglesFor,
   tokensFor,
 } from '../src/similarity.js';
@@ -523,5 +524,121 @@ test('runSimilarity always exits 0, clean or dirty', () => {
   } finally {
     cleanup(dirty);
     cleanup(clean);
+  }
+});
+
+// ad4f27b: shingles are 64-bit FNV-1a hashes with a separator unit after
+// EVERY token (upstream parity with the joined '\u001f' strings). The
+// separator makes token boundaries unambiguous: ["ab","c"] and ["a","bc"]
+// — identical as a joined string — must hash differently.
+test('shingle hashes keep token boundaries distinct', () => {
+  const tail = ['d1', 'd2', 'd3', 'd4', 'd5', 'd6'];
+  const abC = shingleHash(['ab', 'c', ...tail], 0);
+  const aBc = shingleHash(['a', 'bc', ...tail], 0);
+  assert.notEqual(abC, aBc);
+  assert.equal(typeof abC, 'number');
+  assert.ok(Number.isSafeInteger(abC) && abC >= 0); // non-negative, Number-safe
+  assert.equal(abC, shingleHash(['ab', 'c', ...tail], 0)); // stable across calls
+});
+
+// The inverted-index candidate generation must find exactly the pairs the
+// naive all-pairs loop found (same set, same scores) — pruning only skips
+// pairs that could not cross a positive threshold.
+test('inverted-index candidates match the naive all-pairs result', () => {
+  const corpus = {
+    'a.md': PROSE_A,
+    'b.md': PROSE_B, // near-duplicate of a
+    'c.md': PROSE_C, // unrelated to everything
+    'd.md': PROSE_A.split(' ').slice(0, 24).join(' '), // contained in a
+  };
+  const root = fixture(corpus);
+  try {
+    const report = analyze(root);
+    const naive = [];
+    const shingleSets = Object.entries(corpus).map(([rel, src]) => ({
+      path: rel,
+      shingles: shinglesFor(src, 'markdown'),
+    }));
+    for (let i = 0; i < shingleSets.length; i++) {
+      for (let j = i + 1; j < shingleSets.length; j++) {
+        const jScore = jaccard(shingleSets[i].shingles, shingleSets[j].shingles);
+        const cScore = containment(shingleSets[i].shingles, shingleSets[j].shingles);
+        if (jScore < 0.5 && cScore < 0.85) continue;
+        naive.push({
+          path: `${[shingleSets[i].path, shingleSets[j].path].sort().join('|')}`,
+          jaccard: jScore,
+          containment: cScore,
+        });
+      }
+    }
+    assert.ok(naive.length >= 2); // the corpus really has near-duplicates
+    const got = new Map(
+      report.pairs.map((p) => [[p.a, p.b].sort().join('|'), p]),
+    );
+    assert.equal(got.size, naive.length);
+    for (const want of naive) {
+      const found = got.get(want.path);
+      assert.ok(found, `missing pair ${want.path}`);
+      assert.ok(Math.abs(found.jaccard - want.jaccard) < 1e-12);
+      assert.ok(Math.abs(found.containment - want.containment) < 1e-12);
+    }
+  } finally {
+    cleanup(root);
+  }
+});
+
+// Boilerplate defense: a shingle shared by MORE than 100 files carries no
+// duplicate signal and is skipped as a pair source — 101 identical files
+// produce no pairs at all (the naive loop would emit all 5050), while a
+// genuinely shared rare shingle still pairs its two files.
+test('postings above 100 files are skipped as boilerplate', () => {
+  const files = {};
+  for (let i = 0; i < 101; i++) files[`boiler${i}.md`] = PROSE_A;
+  files['x.md'] = PROSE_A + ' uniquely shared tail words for pair x';
+  files['y.md'] = PROSE_A + ' uniquely shared tail words for pair y';
+  const root = fixture(files);
+  try {
+    const report = analyze(root);
+    assert.deepEqual(report.pairs.map((p) => [p.a, p.b].sort()), [
+      ['x.md', 'y.md'],
+    ]);
+    assert.deepEqual(
+      report.clusters.map((c) => c.files.sort()),
+      [['x.md', 'y.md']],
+    );
+  } finally {
+    cleanup(root);
+  }
+});
+
+// Hard cap: a scan scope matching more than 20000 files is almost
+// certainly an over-broad include/dirs scope; fail loudly with guidance
+// instead of exhausting memory on the shingle index (upstream ad4f27b).
+test('scan cap: over 20000 files is a loud usage error (exit 1)', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'crap4js-similarity-cap-'));
+  try {
+    for (let i = 0; i < 20001; i++) writeFileSync(path.join(root, `f${i}.md`), '# t\n');
+    const r = runCli(root, ['similarity']);
+    assert.equal(r.status, 1); // usage-error convention
+    assert.match(r.stderr, /20001 files, above the 20000-file safety cap/);
+    assert.match(r.stderr, /narrow --include|extend --exclude/);
+  } finally {
+    cleanup(root);
+  }
+});
+
+// ad4f27b adds '.worktrees/**' to the default excludes (this repo's own
+// port worktrees live there); the fleet's main checkout must never scan
+// its worktree copies as duplicates of the real files.
+test('.worktrees/** joins the default excludes', () => {
+  const root = fixture({ 'dup.md': PROSE_A, '.worktrees/dup.md': PROSE_A });
+  try {
+    const ctx = fakeCtx(root);
+    assert.equal(runSimilarity(['--min-shingles', '10'], ctx), 0); // defaults: exclude list
+    const out = ctx.lines.join('');
+    assert.match(out, /1 files scanned/); // the worktree copy never enters the scan
+    assert.doesNotMatch(out, /cluster/);
+  } finally {
+    cleanup(root);
   }
 });
