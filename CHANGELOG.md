@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.34.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.33.0...v0.34.0) (2026-11-17)
+
+
+### Features
+
+* implicit-state gate + mutation verdict/cache fixes (FSM audit) ([#88](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/88)) ([7a129ac](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/7a129ac6a628d2a8f529c5c89f46b5c7940744a2))
+
 ## [0.33.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.32.0...v0.33.0) (2026-11-14)
 
 
