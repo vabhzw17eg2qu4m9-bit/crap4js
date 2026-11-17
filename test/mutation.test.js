@@ -267,6 +267,28 @@ test('verdict: score thresholds and survivor cap decide pass/fail', () => {
   assert.equal(lowScore.violations.length, 1); // 0.8 < 0.9 fails even with cap headroom
 });
 
+test('verdict: integrity violations force the verdict to fail', () => {
+  const site = { rel: 'src/lib.js', line: 2, category: 'constant', original: '0', mutant: '1' };
+  // A perfect outcome table (score 1, no survivors) still fails when the
+  // end-of-run tree check had to re-restore files — the run is suspect.
+  const suspect = verdict([], 0, { minScore: 0.8, maxSurvivors: 0 }, ['src/lib.js']);
+  assert.equal(suspect.score, 1);
+  assert.equal(suspect.violations.length, 1);
+  assert.equal(suspect.violations[0].file, 'src/lib.js');
+  assert.equal(suspect.violations[0].line, undefined); // no line: file-level
+  assert.match(suspect.violations[0].message, /working tree did not restore cleanly/);
+  assert.match(suspect.violations[0].message, /treat the run as suspect and re-run/);
+  assert.match(mutationSummary({ ...suspect, violations: suspect.violations.length }), /INTEGRITY/);
+  // Empty integrity + a good score still passes.
+  assert.deepEqual(verdict([], 0, { minScore: 0.8, maxSurvivors: 0 }, []).violations, []);
+  // Survivor violations come first; integrity violations ride after.
+  const mixed = verdict([{ site, outcome: SURVIVED }], 0, { minScore: 0.8, maxSurvivors: 0 }, ['src/lib.js']);
+  assert.equal(mixed.violations.length, 2);
+  assert.equal(mixed.violations[0].line, 2);
+  assert.equal(mixed.violations[1].file, 'src/lib.js');
+  assert.equal(mixed.violations[1].line, undefined);
+});
+
 test('mutationViolations: end-to-end — covered sites only, survivors flagged with file and line', () => {
   const root = signProject({
     // Never covered: absent from the coverage JSON, so its sites are

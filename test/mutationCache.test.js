@@ -226,6 +226,72 @@ test('persistence: a corrupt file or wrong version yields an empty cache', (t) =
   assert.deepEqual(MutationCache.load(path.join(root, 'absent.json'), META).methods, {});
 });
 
+// The discard-reason hook (crap4dart 34e2163080): a silent full re-run
+// looks identical to a warm one and hides config drift — every discard
+// path reports its reason, a warm or missing cache reports nothing.
+test('load: every discard path reports its reason to onDiscard', (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), 'crap4js-mcache-'));
+  t.after(() => cleanup(root));
+  const file = path.join(root, MUTATION_CACHE_FILE_NAME);
+  const reasons = [];
+  const load = () => MutationCache.load(file, META, (reason) => reasons.push(reason));
+
+  // Missing file: fresh, silently.
+  load();
+  assert.deepEqual(reasons, []);
+
+  // Warm cache under the current meta: no discard.
+  writeFileSync(file, JSON.stringify({ version: MUTATION_CACHE_VERSION, meta: META, methods: { x: { digest: 'd', outcomes: [] } } }));
+  load();
+  assert.deepEqual(reasons, []);
+
+  // Corrupt JSON.
+  writeFileSync(file, '{not json at all');
+  load();
+  assert.equal(reasons.length, 1);
+  assert.equal(reasons[0], 'mutation cache discarded: corrupt JSON');
+
+  // Valid JSON, not an object (array and scalar both).
+  writeFileSync(file, JSON.stringify(['not', 'an', 'object']));
+  load();
+  assert.equal(reasons[1], 'mutation cache discarded: not a JSON object');
+  writeFileSync(file, 'null');
+  load();
+  assert.equal(reasons[2], 'mutation cache discarded: not a JSON object');
+
+  // Version mismatch carries the expected version.
+  writeFileSync(file, JSON.stringify({ version: MUTATION_CACHE_VERSION + 1, meta: META, methods: {} }));
+  load();
+  assert.equal(reasons[3], `mutation cache discarded: version mismatch (expected ${MUTATION_CACHE_VERSION})`);
+
+  // Meta mismatch names the cause (operators or test args changed).
+  writeFileSync(file, JSON.stringify({ version: MUTATION_CACHE_VERSION, meta: cacheMetaCurrent(['arithmetic'], []), methods: {} }));
+  load();
+  assert.equal(reasons[4], 'mutation cache discarded: meta mismatch (operators or test args changed)');
+
+  // Without onDiscard the same corrupt file still loads fresh, silently.
+  writeFileSync(file, '{not json at all');
+  assert.deepEqual(MutationCache.load(file, META).methods, {});
+});
+
+test('mutationViolations: a discarded cache announces its reason on stderr', (t) => {
+  const root = twoFnProject();
+  t.after(() => cleanup(root));
+  writeFileSync(cacheFile(root), '{not json');
+  const realWrite = process.stderr.write.bind(process.stderr);
+  let stderr = '';
+  process.stderr.write = (chunk) => {
+    stderr += typeof chunk === 'string' ? chunk : String(chunk);
+    return true;
+  };
+  try {
+    runGate(root, parseMutationArgs([]), fakeRunner());
+  } finally {
+    process.stderr.write = realWrite;
+  }
+  assert.match(stderr, /^crap4js mutation: mutation cache discarded: corrupt JSON\n/);
+});
+
 test('mergeRun: prunes vanished methods and unions fresh with kept outcomes', () => {
   const cache = populated();
   const fresh = new Map([

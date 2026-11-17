@@ -6,10 +6,12 @@
 // re-executed (the suite may have improved), and coverage gating is
 // re-derived from fresh coverage every run. The envelope carries a meta
 // fingerprint (tool version, operators, test_args) — any mismatch, corrupt
-// file, or version change wipes the cache into a full re-execution.
+// file, or version change wipes the cache into a full re-execution; the
+// discard reason surfaces on stderr through the `onDiscard` hook the gate
+// wires (crap4dart 34e2163080).
 
 import { UTF8 } from './files.js';
-import { STRING } from './constants.js';
+import { OBJECT, STRING } from './constants.js';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 
@@ -84,18 +86,28 @@ export class MutationCache {
   }
 
   // A missing, corrupt, outdated or meta-mismatched file yields an empty
-  // cache — a full re-execution under the current semantics.
-  static load(path, meta) {
+  // cache — a full re-execution under the current semantics. When
+  // `onDiscard` is set it receives one line per discarded file: a silent
+  // full re-run looks identical to a warm one and hides config drift.
+  static load(path, meta, onDiscard = null) {
     if (!existsSync(path)) return new MutationCache(meta);
+    let decoded;
     try {
-      const decoded = JSON.parse(readFileSync(path, UTF8));
-      if (decoded?.version !== MUTATION_CACHE_VERSION) return new MutationCache(meta);
-      if (!metaMatches(decoded.meta ?? {}, meta)) return new MutationCache(meta);
-      return new MutationCache(meta, readMethods(decoded.methods));
+      decoded = JSON.parse(readFileSync(path, UTF8));
     } catch {
       // SyntaxError from JSON.parse — a corrupt file means full re-execution.
-      return new MutationCache(meta);
+      return discarded(meta, onDiscard, 'corrupt JSON');
     }
+    if (typeof decoded !== OBJECT || decoded === null || Array.isArray(decoded)) {
+      return discarded(meta, onDiscard, 'not a JSON object');
+    }
+    if (decoded.version !== MUTATION_CACHE_VERSION) {
+      return discarded(meta, onDiscard, `version mismatch (expected ${MUTATION_CACHE_VERSION})`);
+    }
+    if (!metaMatches(decoded.meta ?? {}, meta)) {
+      return discarded(meta, onDiscard, 'meta mismatch (operators or test args changed)');
+    }
+    return new MutationCache(meta, readMethods(decoded.methods));
   }
 
   // Returns the cached `killed` outcome matching `site` when the stored
@@ -141,12 +153,19 @@ export class MutationCache {
 }
 
 function readMethods(raw) {
-  if (!raw || typeof raw !== 'object') return {};
+  if (!raw || typeof raw !== OBJECT) return {};
   return Object.fromEntries(
     Object.entries(raw)
-      .filter(([key, value]) => typeof key === STRING && value && typeof value === 'object')
+      .filter(([key, value]) => typeof key === STRING && value && typeof value === OBJECT)
       .map(([key, value]) => [key, readMethod(value)]),
   );
+}
+
+// A fresh cache plus, when `onDiscard` is set, the one-line reason why the
+// previous cache was thrown away. The gate prefixes the tool name.
+function discarded(meta, onDiscard, reason) {
+  onDiscard?.(`mutation cache discarded: ${reason}`);
+  return new MutationCache(meta);
 }
 
 // Malformed fields fall back to values that can never replay: an empty

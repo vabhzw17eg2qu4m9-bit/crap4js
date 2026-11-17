@@ -467,17 +467,29 @@ export function runMutantTests(projectRoot, timeoutMs, spawn = spawnSync, testAr
  * Build the gate result from per-mutant outcomes: score
  * killed / (killed + survived), one violation per surviving mutant.
  * `integrityViolations` (project-relative paths re-restored by the
- * end-of-run tree check) rides along for the summary.
+ * end-of-run tree check) fail the verdict regardless of the score —
+ * one violation per re-restored file, after the survivor violations.
  */
 export function verdict(outcomes, uncovered, opts, integrityViolations = []) {
   const killed = outcomes.filter((o) => o.outcome === KILLED).length;
   const survived = outcomes.length - killed;
   const score = outcomes.length === 0 ? 1 : killed / outcomes.length;
   const result = { killed, survived, uncovered, score, outcomes, integrityViolations, violations: [] };
-  if (score >= opts.minScore && survived <= opts.maxSurvivors) return result;
-  result.violations = outcomes
-    .filter((o) => o.outcome !== KILLED)
-    .map((o) => survivorViolation(o.site));
+  // Integrity violations force the verdict to fail: a run that had to
+  // re-restore files cannot trust its own outcome table, however perfect.
+  const failed = score < opts.minScore
+    || survived > opts.maxSurvivors
+    || integrityViolations.length > 0;
+  if (!failed) return result;
+  result.violations = [
+    ...outcomes
+      .filter((o) => o.outcome !== KILLED)
+      .map((o) => survivorViolation(o.site)),
+    ...integrityViolations.map((file) => ({
+      file,
+      message: 'working tree did not restore cleanly after the mutation run — the file was re-restored; treat the run as suspect and re-run',
+    })),
+  ];
   return result;
 }
 
@@ -545,9 +557,16 @@ export function mutationViolations(files, projectRoot, opts, deps = {}) {
 // scan's site identities.
 function openCache(projectRoot, opts, selection) {
   if (!opts.cache) return null;
+  const cacheFile = path.join(projectRoot, MUTATION_CACHE_FILE_NAME);
   return {
-    cache: MutationCache.load(path.join(projectRoot, MUTATION_CACHE_FILE_NAME), cacheMetaCurrent(opts.operators, opts.testArgs)),
-    cacheFile: path.join(projectRoot, MUTATION_CACHE_FILE_NAME),
+    cache: MutationCache.load(
+      cacheFile,
+      cacheMetaCurrent(opts.operators, opts.testArgs),
+      // A silent full re-run looks identical to a warm one and hides
+      // config drift — the discard reason goes to stderr, like upstream.
+      (message) => process.stderr.write(`crap4js mutation: ${message}\n`),
+    ),
+    cacheFile,
     siteMethods: selection.siteMethods,
     liveKeys: selection.liveKeys,
   };

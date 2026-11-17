@@ -30,6 +30,9 @@ export const IGNORE = 'ignore';
 // string-token label all spell it identically.
 export const STRING = 'string';
 
+// The `object` typeof tag, shared the same way.
+export const OBJECT = 'object';
+
 // Milliseconds per second — the unit scale factor 1000: seconds to
 // millis (mutation timeout), micros to millis and millis to seconds
 // (profile report formatting).

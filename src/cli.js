@@ -106,7 +106,8 @@
 // `unused-files`, `banned-imports`, `magic-constants`, `scattered-constants`,
 // `duplicates`, `similarity`, `test-assertions`, `inline-anon-types`,
 // `folder-structure`, `mutation`, `reorder`, `string-hazards`,
-// `identical-branches`, `collapsible-flow`, `non-null-assertion`, `loc`,
+// `identical-branches`, `collapsible-flow`, `non-null-assertion`,
+// `implicit-state`, `loc`,
 // `method-size`, `public-docs`, `test-coverage`, `complexity`, `memory`,
 // or `skill`;
 // anything else is analyzed as before.
@@ -142,6 +143,7 @@ import { runStringHazards } from './stringHazards.js';
 import { runIdenticalBranches } from './identicalBranches.js';
 import { runCollapsibleFlow } from './collapsibleFlow.js';
 import { runNonNullAssertion } from './nonNullAssertion.js';
+import { runImplicitState } from './implicitState.js';
 import { runLoc } from './loc.js';
 import { runMethodSize } from './methodSize.js';
 import { runPublicDocs } from './publicDocs.js';
@@ -301,6 +303,16 @@ function usage() {
     '                           the same intent with a readable',
     '                           check. Warning by default — findings',
     '                           exit 0; --severity error exits 2.',
+    '  crap4js implicit-state [--min-flags N] [--min-mutators N]',
+    '                [--severity warning|error] [paths...]',
+    '                           Flag implicit finite state machines:',
+    '                           lifecycle-flag clusters mutated across',
+    '                           methods, lifecycle/status fields',
+    '                           mutated from many places, and',
+    '                           if-conditions branching on 2+ flags',
+    '                           of one class. Warning by default —',
+    '                           findings exit 0; error severity',
+    '                           exits 2.',
     '  crap4js loc [--max-lines N] [--exclude GLOB]... [paths...]',
     '                           Fail files longer than N lines (default',
     '                           800); --exclude drops files from the',
@@ -355,6 +367,7 @@ const SUBCOMMANDS = {
   'identical-branches': (args, ctx) => runIdenticalBranches(args, ctx),
   'collapsible-flow': (args, ctx) => runCollapsibleFlow(args, ctx),
   'non-null-assertion': (args, ctx) => runNonNullAssertion(args, ctx),
+  'implicit-state': (args, ctx) => runImplicitState(args, ctx),
   loc: (args, ctx) => runLoc(args, ctx),
   'method-size': (args, ctx) => runMethodSize(args, ctx),
   'public-docs': (args, ctx) => runPublicDocs(args, ctx),
