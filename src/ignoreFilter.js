@@ -42,6 +42,7 @@ export const IGNORABLE_GATES = new Set([
   'duplicates',
   'file-naming',
   'identical-branches',
+  'implicit-state',
   'inline-anon-types',
   'loc',
   'magic-constants',

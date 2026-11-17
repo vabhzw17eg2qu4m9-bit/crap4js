@@ -502,7 +502,9 @@ crap4dart identical_branches gate (upstream spec §11.26, commit
 c6b2425add); `collapsible-flow` is a port of the crap4dart
 collapsible_flow gate (upstream spec §11.28, commit 7bdfd64ae1);
 `non-null-assertion` is a port of the crap4dart non_null_assertion
-gate (upstream spec §11.29, commit e3ad58594c).
+gate (upstream spec §11.29, commit e3ad58594c); `implicit-state` is a
+port of the crap4dart implicit_state gate (upstream spec §11.30,
+commit 34e2163080).
 crap4js has no gate framework and no config file, so each gate is
 a CLI subcommand with its built-in default thresholds; every gate accepts
 `[paths...]` (default: the normal source-selection rules, test files and
@@ -527,7 +529,11 @@ not bugs. `non-null-assertion` adopts it too, for the upstream
 rationale: on an existing codebase every removed `!` needs a per-site
 nullability audit (upstream adopts via the `--save-baseline` ratchet,
 which crap4js does not port — the ratchet is a manual discipline, see
-[non-null-assertion](#non-null-assertion)). crap4js has no YAML config,
+[non-null-assertion](#non-null-assertion)). `implicit-state` adopts it
+for the same reason: its findings are name-shape heuristics — refactor
+candidates, not bugs — and upstream adopts via `severity: warning`
+plus a baseline (see [implicit-state](#implicit-state)). crap4js has
+no YAML config,
 so gate
 options are CLI flags.
 The ignore-comment suppression system IS ported (crap4dart 8abb64c,
@@ -570,7 +576,7 @@ Ignorable mapping (upstream family → crap4js gate):
 
 | crap4js gates | markers honored | upstream families |
 |---|---|---|
-| `banned-imports`, `class-size`, `collapsible-flow`, `duplicates`, `identical-branches`, `inline-anon-types`, `magic-constants`, `nesting`, `non-null-assertion`, `scattered-constants`, `string-hazards`, `test-assertions`, `unused-code`, `weight-of-class` | line + file | `banned_imports`, `class_size`, `collapsible_flow`, `duplication`, `identical_branches`, `inline_record_types`+`record_size`, `magic_constants`, `nesting`, `non_null_assertion`, `scattered_constants`, `string_hazards`, `test_assertions`, `unused_code`, `weight_of_class` |
+| `banned-imports`, `class-size`, `collapsible-flow`, `duplicates`, `identical-branches`, `implicit-state`, `inline-anon-types`, `magic-constants`, `nesting`, `non-null-assertion`, `scattered-constants`, `string-hazards`, `test-assertions`, `unused-code`, `weight-of-class` | line + file | `banned_imports`, `class_size`, `collapsible_flow`, `duplication`, `identical_branches`, `implicit_state`, `inline_record_types`+`record_size`, `magic_constants`, `nesting`, `non_null_assertion`, `scattered_constants`, `string_hazards`, `test_assertions`, `unused_code`, `weight_of_class` |
 | `file-naming`, `unused-files` | file only (violations have no line) | `file_naming`, `unused_files` |
 | `folder-structure` | none — violations name directories, which no comment addresses | `folder_structure` |
 | `mutation` | none — its summary carries the pre-aggregated score, which would desync from the filtered violation list | `mutation` |
@@ -1053,11 +1059,18 @@ on-disk content drifted from its snapshot (an out-of-band write
 defeating the per-site restore — external edit, killed process) is
 re-restored AND surfaced as an `INTEGRITY` violation in the summary
 (`; INTEGRITY: re-restored after run: src/x.js`) plus a stderr warning;
-the tree is healed, but the run must be treated as suspect.
+the tree is healed, but the run must be treated as suspect. Integrity
+violations FAIL the verdict regardless of the outcome table (port of
+crap4dart 34e2163080): each re-restored file adds one line-less
+violation (`working tree did not restore cleanly after the mutation
+run — the file was re-restored; treat the run as suspect and re-run`)
+after the survivor violations, so a perfect score with a suspect tree
+still exits 2.
 
 The mutation score is `killed / (killed + survived)`. The gate fails when
-the score is below `--min-score` (default 0.8) or when more than
-`--max-survivors` (default 0) mutants survive, and reports one
+the score is below `--min-score` (default 0.8), when more than
+`--max-survivors` (default 0) mutants survive, or when any integrity
+violations were re-restored (see above), and reports one
 `file:line` violation per survivor (`survived constant mutant \`0\` ->
 \`1\` in sign`), so diff mode and baseline conventions apply unchanged.
 `--timeout-seconds` (default 60) bounds each mutant run;
@@ -1079,7 +1092,13 @@ method-relative, so an edit in an earlier method of the same file
 invalidates only that method. The envelope carries a meta fingerprint —
 tool version (`crap4js <version>`), sorted enabled operators, joined
 `test_args` — and any mismatch, corrupt file, or envelope-version change
-wipes the cache into a full re-execution. Flags: `--cache`/`--no-cache`
+wipes the cache into a full re-execution; the discard reason is printed
+to stderr as one line — `crap4js mutation: mutation cache discarded:
+corrupt JSON` / `not a JSON object` / `version mismatch (expected N)` /
+`meta mismatch (operators or test args changed)` (port of crap4dart
+34e2163080) — because a silent full re-run looks identical to a warm
+one and hides config drift. A missing cache file discards silently.
+Flags: `--cache`/`--no-cache`
 (default: cache on) and `--test-args ARG` (repeatable, values append to
 the default `--test`) scope the per-mutant invocation
 (`node <test-args...>`) — strict validation (non-empty list of non-empty
@@ -1447,6 +1466,114 @@ crap4js has no config file. Dogfood: the first self-scan of crap4js's
 own source found zero bangs (40 files scanned; the repo has no
 `.ts`/`.tsx` files, so the TS-only gate has no surface in this
 codebase yet).
+
+### implicit-state
+
+`crap4js implicit-state [--min-flags N] [--min-mutators N]
+[--severity warning|error] [paths...]` (port of the crap4dart
+implicit_state gate, upstream spec §11.30, commit 34e2163080) surfaces
+*implicit finite state machines* — lifecycle logic spread over boolean
+flag clusters, multi-mutator status fields and conditions that branch
+on flag combinations — using name-shape heuristics on the parsed AST.
+A cluster of mutable lifecycle bools mutated from several methods
+behaves like a state machine with unmodelled combination states; a
+`status`-like field assigned from many places is an FSM whose
+transitions are scattered; `if (this.isLoading && this.hasFailed)`
+branches on an implicit combination. All findings are refactor
+candidates for an explicit state model, not bugs.
+
+Findings (upstream's four, resolved from the AST only):
+
+1. **scattered lifecycle flag** — a single lifecycle-shaped bool field
+   mutated from at least `--min-mutators` (default 2) DISTINCT members
+   (methods, getters/setters, constructors); one violation at the
+   field's declaration line: `lifecycle flag 'X' is mutated from N
+   places — part of an implicit state machine`.
+2. **scattered status field** — an instance field named `status`,
+   `state`, `phase`, `stage`, `mode` or `lifecycle` (exact lowercase
+   match, ANY type) assigned from at least `--min-mutators` distinct
+   members; declaration line: `status field 'X' is mutated from N
+   places — implicit transitions; centralize them`.
+3. **boolean-cluster state machine** — a class declaring at least
+   `--min-flags` (default 3) lifecycle bool fields with at least one
+   of them mutated from at least `--min-mutators` distinct members;
+   one class-level violation at the class line: `class holds N
+   lifecycle flags mutated across methods — a boolean-cluster state
+   machine; model it with an enum/sealed state`. This is the port's
+   spec-over-code divergence (documented): upstream's implementation
+   hardcodes 2 for the "at least one scattered member" clause where
+   its spec and `min_mutators` knob say otherwise; the port follows
+   the knob (identical at the defaults).
+4. **flag-combination condition** — an `if` condition reading two or
+   more declared lifecycle flags of the scanned class; one violation
+   per condition at the if line: `condition branches on N lifecycle
+   flags (a, b) — an implicit state combination; model the states
+   explicitly`. Each `else if` is its own IfStatement and counts;
+   ternaries and loop conditions do not (upstream visits if-statements
+   only). Violations are emitted per class in traversal order
+   (conditions first, then fields, then the cluster).
+
+JS host mapping, per shape:
+
+1. **Field eligibility** — mutable non-static instance fields only:
+   `static` excluded either way, TS `readonly` excluded (Dart's
+   final/const), TS `declare` excluded (ambient). Lifecycle bool
+   evidence: a `boolean` type annotation (`.ts`/`.tsx` only) or a
+   `true`/`false` initializer. Plain `.js` has no types, so the bool
+   requirement is heuristic there: a bool-initialized field counts,
+   and a declaration-only JS field can never prove its type and is
+   not counted — a documented divergence from upstream, which reads
+   the declared type. Status fields follow the same mutability rule:
+   Dart `late final` status fields, which upstream's implementation
+   counts (its status branch skips the mutable check), do not flag
+   here — a documented spec-over-code divergence, same family as
+   finding 3's. Private `#flag` fields participate under their
+   bare name (`#` is syntax, not the name).
+2. **Mutation sites** — any member assignment `X.flag = ...` /
+   `this.flag = ...` whose non-computed property name matches a
+   declared field counts, whatever the receiver (upstream counts the
+   property-name shape: SimpleIdentifier, PropertyAccess and
+   PrefixedIdentifier targets), inside any member body — named or
+   `#private` methods, getters/setters and constructors included.
+   A BARE `flag = ...` inside a method is
+   NOT a field write in JS — that spelling binds a global/undeclared
+   variable, since JS has no implicit `this` — and does not count;
+   computed targets (`this['flag'] = ...`) are invisible to a
+   name-shape scan. TS ctor parameter properties
+   (`constructor(private flag = false)`) declare no class-body field
+   node and are not counted — upstream ignores Dart's `this.x`
+   ctor-parameter fields (no FieldDeclaration) the same way.
+   Assignments attribute to the innermost enclosing
+   member; nested closures attribute to the member they appear in.
+3. **Combination conditions** — JS own-field reads need the receiver:
+   `this.flag` / `this.#flag` reads count; reads through other objects
+   (`other.hasFailed`) do not (upstream counts only bare identifiers —
+   implicit-this reads — and the port's receiver requirement is the
+   honest host map of that); optional-chaining reads (`this?.flag`,
+   OptionalMemberExpression) are not counted either.
+4. **Class scoping** — every class declaration AND class expression
+   body is scanned independently; nested classes are separate scans
+   (their fields never join the enclosing class's sets). Local
+   variables and parameters never count; detection is deliberately
+   syntactic and cannot prove reachability, dead states, races or
+   cross-layer inconsistency.
+
+Summary format: `M classes scanned, no implicit state machines` on
+pass, `N implicit-state finding(s) (M classes scanned)` on findings.
+Severity: **warning by default** — findings are printed but exit 0;
+error severity exits 2 (same rationale and manual baseline ratchet as
+[non-null-assertion](#non-null-assertion)). `--min-flags`/
+`--min-mutators` flatten upstream's `min_flags`/`min_mutators` config
+keys; unknown `--flag=...` and unknown severity values are usage
+errors (exit 1) — the port's form of upstream's strict unknown-key
+rejection. Violations honor ignore markers (`implicit-state` is in
+`IGNORABLE_GATES`); upstream's `enabled`/`ignorable`/`severity`
+config keys map to the port's conventions (default-on subcommand,
+hard-coded registry entry, `--severity` flag). Upstream's
+`gate_configs_quality.dart` reader and its config tests are N/A —
+crap4js has no config file. Dogfood: the first self-scan of crap4js's
+own source found zero implicit state machines (3 classes scanned,
+default thresholds).
 
 ### not ported from 0.7–0.9 (no crap4js equivalent)
 

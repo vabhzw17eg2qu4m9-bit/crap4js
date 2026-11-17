@@ -178,6 +178,16 @@ crap4js non-null-assertion [--severity warning|error] [paths...]
                          ++/--, ?. and ?? are not flagged). Warning by
                          default — findings exit 0; --severity error
                          exits 2.
+crap4js implicit-state [--min-flags N] [--min-mutators N]
+                      [--severity warning|error] [paths...]
+                         Flag implicit finite state machines:
+                         lifecycle-flag clusters mutated across
+                         methods, lifecycle/status fields mutated
+                         from many places, and if-conditions
+                         branching on 2+ flags of one class —
+                         candidates for an explicit state model.
+                         Warning by default — findings exit 0;
+                         error severity exits 2.
 crap4js loc [--max-lines N] [--exclude GLOB]... [paths...]
                          Fail files longer than N lines (default 800);
                          --exclude drops files from the check entirely.
@@ -212,7 +222,8 @@ The gate-check subcommands (`file-naming`, `nesting`, `class-size`,
 `magic-constants`, `scattered-constants`, `duplicates`, `similarity`,
 `test-assertions`, `inline-anon-types`, `folder-structure`, `mutation`,
 `string-hazards`, `identical-branches`, `collapsible-flow`,
-`non-null-assertion`, `loc`, `method-size`, `public-docs`,
+`non-null-assertion`, `implicit-state`, `loc`, `method-size`,
+`public-docs`,
 `test-coverage`, `complexity`)
 are ports of
 crap4dart gates. crap4js has no gate framework or config
@@ -220,8 +231,8 @@ file, so each gate is a subcommand with its default thresholds and the
 shared exit-code contract: `0` pass/skip, `1` usage error, `2` violations
 (`similarity` is informational and exits 0 — except a scan scope above
 the 20000-file safety cap, a usage error: exit 1; see its section;
-`string-hazards`, `identical-branches`, `collapsible-flow`, and
-`non-null-assertion` default
+`string-hazards`, `identical-branches`, `collapsible-flow`,
+`non-null-assertion`, and `implicit-state` default
 to warning severity, where findings are printed but exit 0, and
 `--severity error` restores exit 2 — see their sections).
 
@@ -1122,6 +1133,92 @@ it there. Findings honor ignore markers
 `1` on usage errors. Dogfood: the first self-scan of crap4js's own
 source found zero bangs (40 files scanned; the repo has no `.ts`/
 `.tsx` files, so the TS-only gate has no surface in this codebase yet).
+
+## implicit-state
+
+`crap4js implicit-state [--min-flags N] [--min-mutators N]
+[--severity warning|error] [paths...]` (port of crap4dart's
+implicit_state gate, upstream spec §11.30, commit 34e2163080) surfaces
+*implicit finite state machines*: lifecycle logic spread over boolean
+flag clusters, multi-mutator status fields and conditions that branch
+on flag combinations. A cluster of mutable lifecycle bools mutated from
+several methods behaves like a state machine with unmodelled
+combination states; a `status`-like field assigned from many places is
+an FSM whose transitions are scattered; `if (this.isLoading &&
+this.hasFailed)` branches on an implicit combination. All three make
+invalid states representable and transitions unauditable — the fix is
+an explicit model (a single `#transition` method, a state object).
+Findings are refactor candidates, not bugs.
+
+Four findings, all name-shape heuristics on the parsed AST:
+
+1. **scattered lifecycle flag** — a single lifecycle-shaped bool field
+   mutated from `--min-mutators` (default 2) distinct methods;
+   reported at the field's declaration line.
+2. **scattered status field** — a field named `status`, `state`,
+   `phase`, `stage`, `mode` or `lifecycle` (any type) assigned from
+   `--min-mutators` distinct methods; declaration line.
+3. **boolean-cluster state machine** — a class holding `--min-flags`
+   (default 3) lifecycle bools with at least one mutated from
+   `--min-mutators` distinct methods; reported at the class line.
+4. **flag-combination condition** — an `if` condition reading 2+
+   declared flags of the scanned class; each `else if` is its own
+   condition.
+
+JS host mapping:
+
+- Lifecycle-flag name shape: `is/has/was/will/should/can` + Capital
+  (`isLoading`, `hasFailed`), or a lifecycle keyword suffix
+  (`shardLoaded`, `engineReady`, `runPending`).
+- Eligibility: mutable non-static instance fields only — `static`,
+  TS `readonly` (Dart's final/const) and TS `declare` (ambient)
+  excluded. Plain `.js` has no
+  types, so the bool requirement is heuristic there: a field
+  initialized to `true`/`false` counts as a lifecycle bool, while
+  `.ts`/`.tsx` fields with a `boolean` annotation qualify with or
+  without an initializer. A JS declaration-only field can never prove
+  its type and is not counted (documented divergence from upstream,
+  which reads the declared type). Status fields follow the same
+  mutability rule — Dart `late final` status fields, which upstream's
+  implementation counts (its status branch skips the mutable check),
+  do not flag here (documented spec-over-code divergence). Private
+  `#flag` fields participate under their bare name.
+- Mutations: `this.flag = ...` and any `obj.flag = ...` member
+  assignment with a matching property name count, whatever the
+  receiver (upstream counts the property-name shape only), inside any
+  member body — named or `#private` methods, getters/setters and
+  constructors included. A bare
+  `flag = ...` inside a method is NOT a field write in JS (that
+  spelling is a global/undeclared variable — JS has no implicit
+  `this`) and does not count; computed targets (`this['flag'] = ...`)
+  stay invisible to a name-shape scan. TS ctor parameter properties
+  (`constructor(private flag = false)`) declare no class-body field
+  node and are not counted — upstream ignores Dart's `this.x`
+  ctor-parameter fields the same way.
+- Combination conditions: JS own-field reads need the receiver —
+  `this.flag` reads count, reads through other objects
+  (`other.hasFailed`) do not; optional-chaining reads (`this?.flag`,
+  OptionalMemberExpression) are not counted either. Ternaries and loop
+  conditions are not conditions in v1 (upstream visits if-statements
+  only).
+- Detection is per class: every class declaration/expression body is
+  scanned independently; nested classes are separate scans. Local
+  variables and parameters never count.
+
+Severity: default **warning** — findings are printed but exit 0;
+error severity exits 2. The warning default is upstream's posture: the
+detections are name-shape heuristics that cannot prove reachability or
+races — they mark candidates for an explicit-model refactor. Upstream
+adopts via `severity: warning` plus a baseline; crap4js has no
+baseline machinery, so the ratchet is the same manual discipline as
+[non-null-assertion](#non-null-assertion). `--min-flags`/`--min-mutators`
+flatten upstream's `min_flags`/`min_mutators` config keys (crap4js has
+no config file). Findings honor ignore markers
+(`// ignore:implicit-state`, or the legacy blanket markers). Exit `1`
+on usage errors. Dogfood: the first self-scan of crap4js's own source
+found zero implicit state machines (3 classes scanned, default
+thresholds) — none of `TapSpans`, `MutationCache` or the mutation
+error class mutates a cluster of lifecycle bools across methods.
 
 ## `loc`
 
